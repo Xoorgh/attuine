@@ -611,6 +611,13 @@ func (m *Model) updateSidebar(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Enter):
 		return m.handleSidebarEnter()
 
+	case key.Matches(msg, Keys.Cancel):
+		if m.expandedName != "" {
+			m.expandedName = ""
+			m.buildEntries()
+		}
+		return m, nil
+
 	case key.Matches(msg, Keys.ServiceUp):
 		svc := m.selectedServiceName()
 		if svc == "" {
@@ -757,8 +764,6 @@ func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if selected != m.activeProfile {
 				m.activeProfile = selected
 				m.showOverlay = false
-				// Save state on profile switch.
-				m.saveProfileState(selected)
 				m.appendOutput(fmt.Sprintf("[switching profile to %s...]", selected))
 				return m, m.switchProfile(selected)
 			}
@@ -884,23 +889,35 @@ func (m *Model) renderOutputPanel() string {
 func (m *Model) renderStatusBar() string {
 	var parts []string
 
-	parts = append(parts, actionKeyStyle.Render("u/d/r")+" "+actionDescStyle.Render("service"))
-	parts = append(parts, actionKeyStyle.Render("U/D/R")+" "+actionDescStyle.Render("profile"))
-	parts = append(parts, actionKeyStyle.Render("l")+" "+actionDescStyle.Render("logs"))
-	parts = append(parts, actionKeyStyle.Render("s")+" "+actionDescStyle.Render("shell"))
+	// Contextual hints based on cursor
+	entry := m.cursorEntry()
+	if entry != nil {
+		switch entry.kind {
+		case entryService:
+			parts = append(parts, actionKeyStyle.Render("u/d/r")+" "+actionDescStyle.Render("service"))
+			parts = append(parts, actionKeyStyle.Render("U/D/R")+" "+actionDescStyle.Render("profile"))
+			parts = append(parts, actionKeyStyle.Render("l")+" "+actionDescStyle.Render("logs"))
+			parts = append(parts, actionKeyStyle.Render("s")+" "+actionDescStyle.Render("shell"))
+		case entryCommand:
+			parts = append(parts, actionKeyStyle.Render("enter")+" "+actionDescStyle.Render("run"))
+			parts = append(parts, actionKeyStyle.Render("esc")+" "+actionDescStyle.Render("back"))
+		case entryProject:
+			parts = append(parts, actionKeyStyle.Render("enter")+" "+actionDescStyle.Render("expand"))
+			parts = append(parts, actionKeyStyle.Render("U/D/R")+" "+actionDescStyle.Render("profile"))
+		}
+	} else {
+		parts = append(parts, actionKeyStyle.Render("U/D/R")+" "+actionDescStyle.Render("profile"))
+	}
+
 	parts = append(parts, actionKeyStyle.Render("?")+" "+actionDescStyle.Render("help"))
 
 	if m.activeProfile != "" {
 		parts = append(parts, actionKeyStyle.Render("profile:")+" "+actionDescStyle.Render(m.activeProfile))
 	}
-
 	parts = append(parts, actionDescStyle.Render(fmt.Sprintf("%d/%d running", m.runningCount, len(m.services))))
 
 	bar := strings.Join(parts, "  │  ")
-
-	return statusBarStyle.
-		Width(m.width).
-		Render(bar)
+	return statusBarStyle.Width(m.width).Render(bar)
 }
 
 // renderOverlay renders a centered overlay dialog (e.g., profile picker).
@@ -1007,13 +1024,11 @@ func (m *Model) updateServices(statuses []docker.ServiceStatus) {
 	}
 
 	// Add any new services we haven't seen before.
-	for _, s := range statuses {
-		if _, exists := statusMap[s.Service]; exists {
-			svc := Service{Name: s.Service, State: s.State, Ports: s.Ports}
-			m.services = append(m.services, svc)
-			if s.State == "running" {
-				m.runningCount++
-			}
+	for name, s := range statusMap {
+		svc := Service{Name: name, State: s.State, Ports: s.Ports}
+		m.services = append(m.services, svc)
+		if s.State == "running" {
+			m.runningCount++
 		}
 	}
 
@@ -1069,18 +1084,18 @@ func (m *Model) switchProfile(profileName string) tea.Cmd {
 func (m *Model) bringUpProfile() tea.Cmd {
 	profiles := m.activeProfiles()
 	hooks := m.cfg.Hooks.PreUp
+	name := m.activeProfile // capture before closure
 	if len(hooks) > 0 {
 		return func() tea.Msg {
 			return HookStartMsg{
 				hook:      hooks[0],
 				remaining: hooks[1:],
 				profiles:  profiles,
-				name:      m.activeProfile,
+				name:      name,
 			}
 		}
 	}
 	compose := m.compose
-	name := m.activeProfile
 	return func() tea.Msg {
 		if err := compose.Up(context.Background(), profiles); err != nil {
 			return ProfileUpMsg{name: name, err: err}
