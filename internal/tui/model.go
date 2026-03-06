@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 
 	"oxorg/attuine/internal/config"
 	"oxorg/attuine/internal/docker"
+	"oxorg/attuine/internal/runner"
 )
 
 // NavSection represents which section of the nav panel is active.
@@ -71,9 +74,16 @@ type ProfileSwitchMsg struct {
 	Err error
 }
 
-// logBatchMsg carries a batch of log lines to append at once.
+// logBatchMsg carries a single log line and the channel to read the next from.
 type logBatchMsg struct {
-	Lines []string
+	line string
+	ch   <-chan string
+}
+
+// cmdStreamMsg carries a single command output line and the channel to read next from.
+type cmdStreamMsg struct {
+	line string
+	ch   <-chan string
 }
 
 const navWidth = 14
@@ -126,7 +136,7 @@ type Model struct {
 	spinner spinner.Model
 
 	// cancel function for streaming logs/output
-	cancelStream context.CancelFunc
+	logCancel context.CancelFunc
 
 	// status tracking
 	runningCount int
@@ -228,10 +238,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case logBatchMsg:
-		for _, line := range msg.Lines {
-			m.appendOutput(line)
-		}
-		return m, nil
+		m.appendOutput(msg.line)
+		return m, readLogLine(msg.ch)
+
+	case cmdStreamMsg:
+		m.appendOutput(msg.line)
+		return m, readStream(msg.ch)
 
 	case TickMsg:
 		cmds = append(cmds, m.pollStatus)
@@ -283,10 +295,7 @@ func (m *Model) View() string {
 func (m *Model) updateKeypress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, Keys.Quit):
-		if m.cancelStream != nil {
-			m.cancelStream()
-			m.cancelStream = nil
-		}
+		m.cancelLogs()
 		return m, tea.Quit
 
 	case key.Matches(msg, Keys.Help):
@@ -431,7 +440,7 @@ func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateServiceKeys handles keys for the service list (stub for now).
+// updateServiceKeys handles keys for the service list.
 func (m *Model) updateServiceKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, Keys.Down):
@@ -442,6 +451,75 @@ func (m *Model) updateServiceKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.serviceCursor > 0 {
 			m.serviceCursor--
 		}
+
+	case key.Matches(msg, Keys.ServiceUp):
+		if len(m.services) == 0 {
+			return m, nil
+		}
+		svc := m.services[m.serviceCursor].Name
+		profiles := m.activeProfiles()
+		compose := m.compose
+		m.appendOutput(fmt.Sprintf("[starting %s...]", svc))
+		return m, func() tea.Msg {
+			if err := compose.Up(context.Background(), profiles, svc); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error starting %s: %v]", svc, err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s started]", svc)}
+		}
+
+	case key.Matches(msg, Keys.ServiceDown):
+		if len(m.services) == 0 {
+			return m, nil
+		}
+		svc := m.services[m.serviceCursor].Name
+		compose := m.compose
+		m.appendOutput(fmt.Sprintf("[stopping %s...]", svc))
+		return m, func() tea.Msg {
+			args := compose.BuildArgs("stop", svc)
+			cmd := exec.CommandContext(context.Background(), "docker", args...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error stopping %s: %s: %v]", svc, strings.TrimSpace(string(out)), err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s stopped]", svc)}
+		}
+
+	case key.Matches(msg, Keys.ServiceRebuild):
+		if len(m.services) == 0 {
+			return m, nil
+		}
+		svc := m.services[m.serviceCursor].Name
+		compose := m.compose
+		m.appendOutput(fmt.Sprintf("[rebuilding %s...]", svc))
+		return m, func() tea.Msg {
+			if err := compose.Build(context.Background(), svc); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error rebuilding %s: %v]", svc, err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s rebuilt]", svc)}
+		}
+
+	case key.Matches(msg, Keys.ServiceLogs):
+		if len(m.services) == 0 {
+			return m, nil
+		}
+		svc := m.services[m.serviceCursor].Name
+		m.cancelLogs()
+		m.appendOutput(fmt.Sprintf("[streaming logs for %s...]", svc))
+		ch, cancel := m.compose.Logs(context.Background(), svc)
+		m.logCancel = cancel
+		return m, readLogLine(ch)
+
+	case key.Matches(msg, Keys.ServiceShell):
+		if len(m.services) == 0 {
+			return m, nil
+		}
+		svc := m.services[m.serviceCursor].Name
+		c := m.compose.Shell(context.Background(), svc)
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			if err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[shell error: %v]", err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[shell for %s closed]", svc)}
+		})
 	}
 	return m, nil
 }
@@ -467,8 +545,33 @@ func (m *Model) updateProjectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateCommandKeys handles keys for the command list (stub for now).
+// updateCommandKeys handles keys for the command list.
 func (m *Model) updateCommandKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.selectedProject == "" {
+		return m, nil
+	}
+	proj, ok := m.cfg.Projects[m.selectedProject]
+	if !ok || len(proj.Commands) == 0 {
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(msg, Keys.Down):
+		if m.commandCursor < len(proj.Commands)-1 {
+			m.commandCursor++
+		}
+	case key.Matches(msg, Keys.Up):
+		if m.commandCursor > 0 {
+			m.commandCursor--
+		}
+	case key.Matches(msg, Keys.Enter):
+		if m.commandCursor < len(proj.Commands) {
+			cmd := proj.Commands[m.commandCursor]
+			m.cancelLogs()
+			m.appendOutput(fmt.Sprintf("[running %s: %s]", cmd.Name, cmd.Run))
+			return m, m.runCommand(m.selectedProject, cmd)
+		}
+	}
 	return m, nil
 }
 
@@ -807,5 +910,102 @@ func (m *Model) switchProfile(profileName string) tea.Cmd {
 		}
 
 		return ProfileSwitchMsg{}
+	}
+}
+
+// readLogLine returns a tea.Cmd that reads one line from a log channel.
+func readLogLine(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return OutputLineMsg{Line: "[stream ended]"}
+		}
+		return logBatchMsg{line: line, ch: ch}
+	}
+}
+
+// readStream returns a tea.Cmd that reads one line from a command output channel.
+func readStream(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return OutputLineMsg{Line: "[done]"}
+		}
+		return cmdStreamMsg{line: line, ch: ch}
+	}
+}
+
+// cancelLogs cancels any active log or output stream.
+func (m *Model) cancelLogs() {
+	if m.logCancel != nil {
+		m.logCancel()
+		m.logCancel = nil
+	}
+}
+
+// activeProfiles returns the compose profiles for the currently active profile name.
+func (m *Model) activeProfiles() []string {
+	for _, p := range m.cfg.Profiles {
+		if p.Name == m.activeProfile {
+			return p.Profiles
+		}
+	}
+	return nil
+}
+
+// runCommand returns a tea.Cmd that executes a project command.
+func (m *Model) runCommand(projectName string, cmd config.Command) tea.Cmd {
+	compose := m.compose
+	cfg := m.cfg
+
+	proj := cfg.Projects[projectName]
+	dir := proj.Path
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(cfg.Dir, dir)
+	}
+
+	if cmd.Interactive {
+		// Interactive commands suspend the TUI.
+		if cmd.Service != "" {
+			c := compose.ExecInteractive(context.Background(), cmd.Service, cmd.Run)
+			return tea.ExecProcess(c, func(err error) tea.Msg {
+				if err != nil {
+					return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
+				}
+				return OutputLineMsg{Line: fmt.Sprintf("[%s finished]", cmd.Name)}
+			})
+		}
+		c := runner.RunHostInteractive(context.Background(), dir, cmd.Run)
+		return tea.ExecProcess(c, func(err error) tea.Msg {
+			if err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s finished]", cmd.Name)}
+		})
+	}
+
+	// Non-interactive commands stream output.
+	if cmd.Service != "" {
+		return func() tea.Msg {
+			ch, cancel := compose.Exec(context.Background(), cmd.Service, cmd.Run)
+			_ = cancel // channel close handles cleanup
+			line, ok := <-ch
+			if !ok {
+				return OutputLineMsg{Line: "[done]"}
+			}
+			return cmdStreamMsg{line: line, ch: ch}
+		}
+	}
+
+	return func() tea.Msg {
+		ch, err := runner.RunHost(context.Background(), dir, cmd.Run)
+		if err != nil {
+			return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
+		}
+		line, ok := <-ch
+		if !ok {
+			return OutputLineMsg{Line: "[done]"}
+		}
+		return cmdStreamMsg{line: line, ch: ch}
 	}
 }
