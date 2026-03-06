@@ -94,8 +94,14 @@ func ParseStatus(lines []string) ([]ServiceStatus, error) {
 }
 
 // ListServices returns all service names defined in the compose file.
-func (c *Compose) ListServices(ctx context.Context) ([]string, error) {
-	args := c.BuildArgs("config", "--services")
+// It passes --profile for each known profile so profiled services are included.
+func (c *Compose) ListServices(ctx context.Context, profiles []string) ([]string, error) {
+	var profileArgs []string
+	for _, p := range profiles {
+		profileArgs = append(profileArgs, "--profile", p)
+	}
+	profileArgs = append(profileArgs, "config", "--services")
+	args := c.BuildArgs(profileArgs...)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = c.dir
 	out, err := cmd.Output()

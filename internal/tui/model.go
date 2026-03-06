@@ -217,7 +217,18 @@ func New(cfg *config.Config) *Model {
 // Init starts the spinner, seeds the service list, and kicks off the first status poll.
 func (m *Model) Init() tea.Cmd {
 	// Seed service list from compose file so services appear even when stopped.
-	if names, err := m.compose.ListServices(context.Background()); err == nil {
+	// Collect all unique profile names so profiled services are included.
+	profileSet := make(map[string]bool)
+	for _, p := range m.cfg.Profiles {
+		for _, name := range p.Profiles {
+			profileSet[name] = true
+		}
+	}
+	allProfiles := make([]string, 0, len(profileSet))
+	for name := range profileSet {
+		allProfiles = append(allProfiles, name)
+	}
+	if names, err := m.compose.ListServices(context.Background(), allProfiles); err == nil {
 		for _, name := range names {
 			m.services = append(m.services, Service{Name: name})
 		}
