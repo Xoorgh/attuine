@@ -17,25 +17,37 @@ import (
 	"oxorg/attuine/internal/config"
 	"oxorg/attuine/internal/docker"
 	"oxorg/attuine/internal/runner"
-)
-
-// NavSection represents which section of the nav panel is active.
-type NavSection int
-
-const (
-	NavServices NavSection = iota
-	NavProjects
-	NavCommands
+	"oxorg/attuine/internal/state"
 )
 
 // Panel represents which panel currently has focus.
 type Panel int
 
 const (
-	PanelNav Panel = iota
-	PanelContext
+	PanelSidebar Panel = iota
 	PanelOutput
 )
+
+// entryKind distinguishes sidebar entry types.
+type entryKind int
+
+const (
+	entryService entryKind = iota
+	entryCommand
+	entryHeader
+	entryProject
+)
+
+// sidebarEntry is one item in the flat sidebar list.
+type sidebarEntry struct {
+	kind    entryKind
+	name    string
+	service string          // parent service name (for command entries under a service)
+	project string          // project name (for project and command entries)
+	command *config.Command // non-nil for command entries
+	state   string          // service state
+	ports   []string        // service ports
+}
 
 // Service holds the name and current status of a compose service.
 type Service struct {
@@ -44,7 +56,9 @@ type Service struct {
 	Ports []string
 }
 
-// Message types for Bubble Tea.
+// ---------------------------------------------------------------------------
+// Message types for Bubble Tea
+// ---------------------------------------------------------------------------
 
 // ServiceStatusMsg carries updated service statuses from a poll.
 type ServiceStatusMsg struct {
@@ -115,7 +129,9 @@ type cmdStreamMsg struct {
 	ch   <-chan string
 }
 
-const navWidth = 14
+// ---------------------------------------------------------------------------
+// Model
+// ---------------------------------------------------------------------------
 
 // Model is the top-level Bubble Tea model for attuine.
 type Model struct {
@@ -123,56 +139,49 @@ type Model struct {
 	compose *docker.Compose
 
 	// dimensions
-	width  int
-	height int
-
-	// panel sizing (calculated in recalcLayout)
-	contextWidth int
-	outputWidth  int
+	width, height int
+	sidebarWidth  int
+	outputWidth   int
 	contentHeight int
 
-	// navigation
-	activeNav   NavSection
 	activePanel Panel
 
-	// service list
-	services      []Service
-	serviceCursor int
+	// Sidebar
+	services     []Service      // raw service data
+	entries      []sidebarEntry // flat rendered list
+	cursor       int            // position in entries
+	expandedName string         // which service/project is expanded ("" for none)
 
-	// project list
-	projectNames    []string
-	projectCursor   int
-	selectedProject string
+	// Projects
+	projectNames []string // sorted project names from config
 
-	// command list
-	commandCursor int
-
-	// output viewport
-	output   viewport.Model
+	// Output
+	output      viewport.Model
 	outputLines []string
 
-	// overlay state (e.g. profile picker)
-	showOverlay    bool
-	overlayType    string
-	overlayCursor  int
-	showHelp       bool
+	// Overlay
+	showOverlay   bool
+	overlayType   string
+	overlayCursor int
+	showHelp      bool
 
-	// active profile
+	// Profile
 	activeProfile string
 	profileNames  []string
 
-	// spinner for loading indicators
-	spinner spinner.Model
-
-	// cancel function for streaming logs/output
+	// Components
+	spinner   spinner.Model
 	logCancel context.CancelFunc
 
-	// status tracking
+	// State persistence
+	stateDir string
+
+	// Status tracking
 	runningCount int
 }
 
 // New creates a new Model from the loaded config.
-func New(cfg *config.Config) *Model {
+func New(cfg *config.Config, stateDir string) *Model {
 	// Extract sorted project names.
 	var projectNames []string
 	for name := range cfg.Projects {
@@ -192,6 +201,18 @@ func New(cfg *config.Config) *Model {
 		activeProfile = profileNames[0]
 	}
 
+	// Load last profile from state if stateDir is set.
+	if stateDir != "" {
+		if s, err := state.Load(stateDir); err == nil && s.LastProfile != "" {
+			for _, name := range profileNames {
+				if name == s.LastProfile {
+					activeProfile = s.LastProfile
+					break
+				}
+			}
+		}
+	}
+
 	// Set up spinner.
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -202,13 +223,13 @@ func New(cfg *config.Config) *Model {
 	m := &Model{
 		cfg:           cfg,
 		compose:       docker.NewCompose(cfg.ComposeFile, cfg.ComposeEnv, cfg.Dir),
-		activeNav:     NavServices,
-		activePanel:   PanelContext,
+		activePanel:   PanelSidebar,
 		projectNames:  projectNames,
 		profileNames:  profileNames,
 		activeProfile: activeProfile,
 		spinner:       sp,
 		output:        vp,
+		stateDir:      stateDir,
 	}
 
 	return m
@@ -234,11 +255,196 @@ func (m *Model) Init() tea.Cmd {
 		}
 	}
 
+	m.buildEntries()
+
 	return tea.Batch(
 		m.spinner.Tick,
 		m.pollStatus,
 	)
 }
+
+// ---------------------------------------------------------------------------
+// buildEntries — construct the flat sidebar list
+// ---------------------------------------------------------------------------
+
+func (m *Model) buildEntries() {
+	// Remember what was under the cursor so we can restore position.
+	var oldEntry *sidebarEntry
+	if m.cursor >= 0 && m.cursor < len(m.entries) {
+		cp := m.entries[m.cursor]
+		oldEntry = &cp
+	}
+
+	m.entries = nil
+
+	// Build a set of service names for quick lookup.
+	serviceNameSet := make(map[string]bool, len(m.services))
+	for _, svc := range m.services {
+		serviceNameSet[svc.Name] = true
+	}
+
+	// 1. Service entries (and their commands when expanded).
+	for _, svc := range m.services {
+		m.entries = append(m.entries, sidebarEntry{
+			kind:  entryService,
+			name:  svc.Name,
+			state: svc.State,
+			ports: svc.Ports,
+		})
+
+		if m.expandedName == svc.Name {
+			// Find a project whose name matches this service.
+			if proj, ok := m.cfg.Projects[svc.Name]; ok {
+				for i := range proj.Commands {
+					cmd := proj.Commands[i]
+					m.entries = append(m.entries, sidebarEntry{
+						kind:    entryCommand,
+						name:    cmd.Name,
+						service: svc.Name,
+						project: svc.Name,
+						command: &cmd,
+					})
+				}
+			}
+		}
+	}
+
+	// 2. Standalone projects (project name doesn't match any service).
+	var standalone []string
+	for _, pn := range m.projectNames {
+		if !serviceNameSet[pn] {
+			standalone = append(standalone, pn)
+		}
+	}
+
+	if len(standalone) > 0 {
+		m.entries = append(m.entries, sidebarEntry{
+			kind: entryHeader,
+			name: "Projects",
+		})
+
+		for _, pn := range standalone {
+			m.entries = append(m.entries, sidebarEntry{
+				kind:    entryProject,
+				name:    pn,
+				project: pn,
+			})
+
+			if m.expandedName == pn {
+				if proj, ok := m.cfg.Projects[pn]; ok {
+					for i := range proj.Commands {
+						cmd := proj.Commands[i]
+						m.entries = append(m.entries, sidebarEntry{
+							kind:    entryCommand,
+							name:    cmd.Name,
+							service: "", // standalone project, no service
+							project: pn,
+							command: &cmd,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Restore cursor position.
+	m.restoreCursor(oldEntry)
+}
+
+// restoreCursor tries to place the cursor back on the same logical item after
+// a rebuild. If the item no longer exists (e.g. collapsed command), move to
+// the parent service/project.
+func (m *Model) restoreCursor(old *sidebarEntry) {
+	if old == nil || len(m.entries) == 0 {
+		// Ensure cursor is valid.
+		if m.cursor >= len(m.entries) {
+			m.cursor = len(m.entries) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		return
+	}
+
+	// Try exact match.
+	for i, e := range m.entries {
+		if e.kind == old.kind && e.name == old.name && e.project == old.project {
+			m.cursor = i
+			return
+		}
+	}
+
+	// If old was a command entry, move to the parent service or project.
+	if old.kind == entryCommand {
+		parentName := old.service
+		if parentName == "" {
+			parentName = old.project
+		}
+		for i, e := range m.entries {
+			if (e.kind == entryService || e.kind == entryProject) && e.name == parentName {
+				m.cursor = i
+				return
+			}
+		}
+	}
+
+	// Clamp.
+	if m.cursor >= len(m.entries) {
+		m.cursor = len(m.entries) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cursor navigation
+// ---------------------------------------------------------------------------
+
+func (m *Model) cursorEntry() *sidebarEntry {
+	if m.cursor >= 0 && m.cursor < len(m.entries) {
+		return &m.entries[m.cursor]
+	}
+	return nil
+}
+
+func (m *Model) moveCursorDown() {
+	for i := m.cursor + 1; i < len(m.entries); i++ {
+		if m.entries[i].kind != entryHeader {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+func (m *Model) moveCursorUp() {
+	for i := m.cursor - 1; i >= 0; i-- {
+		if m.entries[i].kind != entryHeader {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+// selectedServiceName returns the name of the service related to the current
+// cursor entry, or "" if the cursor is on a non-service item.
+func (m *Model) selectedServiceName() string {
+	entry := m.cursorEntry()
+	if entry == nil {
+		return ""
+	}
+	switch entry.kind {
+	case entryService:
+		return entry.name
+	case entryCommand:
+		return entry.service // parent service (may be "" for host commands)
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
 
 // Update handles all incoming messages.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -254,11 +460,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// If overlay is showing, handle overlay keys first.
 		if m.showOverlay {
 			return m.updateOverlay(msg)
 		}
-		// If help is showing, any key dismisses it.
 		if m.showHelp {
 			m.showHelp = false
 			return m, nil
@@ -320,43 +524,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the entire TUI.
-func (m *Model) View() string {
-	if m.width == 0 || m.height == 0 {
-		return "loading..."
-	}
+// ---------------------------------------------------------------------------
+// Key handling
+// ---------------------------------------------------------------------------
 
-	// If help is showing, render full-screen help.
-	if m.showHelp {
-		return m.renderHelp()
-	}
-
-	nav := m.renderNav()
-	ctx := m.renderContext()
-	out := m.renderOutputPanel()
-
-	// Join panels horizontally.
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, nav, ctx, out)
-
-	// Add status bar at the bottom.
-	statusBar := m.renderStatusBar()
-
-	dashboard := lipgloss.JoinVertical(lipgloss.Left, panels, statusBar)
-
-	// If overlay is active, render it centered on screen.
-	if m.showOverlay {
-		overlay := m.renderOverlay()
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay,
-			lipgloss.WithWhitespaceChars(" "),
-			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
-		)
-	}
-
-	return dashboard
-}
-
-// updateKeypress handles global key presses when no overlay is active.
 func (m *Model) updateKeypress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Global keys (work regardless of panel focus).
 	switch {
 	case key.Matches(msg, Keys.Quit):
 		m.cancelLogs()
@@ -367,26 +540,11 @@ func (m *Model) updateKeypress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, Keys.Tab):
-		m.activePanel = (m.activePanel + 1) % 3
-		return m, nil
-
-	case key.Matches(msg, Keys.ShiftTab):
-		m.activePanel = (m.activePanel + 2) % 3
-		return m, nil
-
-	case key.Matches(msg, Keys.NavService):
-		m.activeNav = NavServices
-		m.activePanel = PanelContext
-		return m, nil
-
-	case key.Matches(msg, Keys.NavProject):
-		m.activeNav = NavProjects
-		m.activePanel = PanelContext
-		return m, nil
-
-	case key.Matches(msg, Keys.NavCommand):
-		m.activeNav = NavCommands
-		m.activePanel = PanelContext
+		if m.activePanel == PanelSidebar {
+			m.activePanel = PanelOutput
+		} else {
+			m.activePanel = PanelSidebar
+		}
 		return m, nil
 
 	case key.Matches(msg, Keys.Profile):
@@ -394,7 +552,6 @@ func (m *Model) updateKeypress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showOverlay = true
 			m.overlayType = "profile"
 			m.overlayCursor = 0
-			// Set cursor to current profile.
 			for i, name := range m.profileNames {
 				if name == m.activeProfile {
 					m.overlayCursor = i
@@ -403,48 +560,161 @@ func (m *Model) updateKeypress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case key.Matches(msg, Keys.BulkUp):
+		m.appendOutput(fmt.Sprintf("[bringing up profile %s...]", m.activeProfile))
+		return m, m.bringUpProfile()
+
+	case key.Matches(msg, Keys.BulkDown):
+		compose := m.compose
+		m.appendOutput("[bringing down all services...]")
+		return m, func() tea.Msg {
+			if err := compose.Down(context.Background()); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
+			}
+			return OutputLineMsg{Line: "[all services stopped]"}
+		}
+
+	case key.Matches(msg, Keys.BulkRebuild):
+		compose := m.compose
+		m.appendOutput("[rebuilding all services...]")
+		return m, func() tea.Msg {
+			if err := compose.Build(context.Background()); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
+			}
+			return OutputLineMsg{Line: "[all services rebuilt]"}
+		}
 	}
 
 	// Delegate to panel-specific handlers.
 	switch m.activePanel {
-	case PanelContext:
-		return m.updateContext(msg)
+	case PanelSidebar:
+		return m.updateSidebar(msg)
 	case PanelOutput:
 		return m.updateOutput(msg)
-	case PanelNav:
-		return m.updateNav(msg)
 	}
 
 	return m, nil
 }
 
-// updateNav handles key presses when the nav panel has focus.
-func (m *Model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// updateSidebar handles key presses when the sidebar has focus.
+func (m *Model) updateSidebar(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, Keys.Down):
-		if m.activeNav < NavCommands {
-			m.activeNav++
-		}
+		m.moveCursorDown()
+		return m, nil
+
 	case key.Matches(msg, Keys.Up):
-		if m.activeNav > NavServices {
-			m.activeNav--
-		}
+		m.moveCursorUp()
+		return m, nil
+
 	case key.Matches(msg, Keys.Enter):
-		m.activePanel = PanelContext
+		return m.handleSidebarEnter()
+
+	case key.Matches(msg, Keys.Cancel):
+		if m.expandedName != "" {
+			m.expandedName = ""
+			m.buildEntries()
+		}
+		return m, nil
+
+	case key.Matches(msg, Keys.ServiceUp):
+		svc := m.selectedServiceName()
+		if svc == "" {
+			return m, nil
+		}
+		profiles := m.activeProfiles()
+		compose := m.compose
+		m.appendOutput(fmt.Sprintf("[starting %s...]", svc))
+		return m, func() tea.Msg {
+			if err := compose.Up(context.Background(), profiles, svc); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error starting %s: %v]", svc, err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s started]", svc)}
+		}
+
+	case key.Matches(msg, Keys.ServiceDown):
+		svc := m.selectedServiceName()
+		if svc == "" {
+			return m, nil
+		}
+		compose := m.compose
+		m.appendOutput(fmt.Sprintf("[stopping %s...]", svc))
+		return m, func() tea.Msg {
+			if err := compose.Stop(context.Background(), svc); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error stopping %s: %v]", svc, err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s stopped]", svc)}
+		}
+
+	case key.Matches(msg, Keys.ServiceRebuild):
+		svc := m.selectedServiceName()
+		if svc == "" {
+			return m, nil
+		}
+		compose := m.compose
+		m.appendOutput(fmt.Sprintf("[rebuilding %s...]", svc))
+		return m, func() tea.Msg {
+			if err := compose.Build(context.Background(), svc); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error rebuilding %s: %v]", svc, err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s rebuilt]", svc)}
+		}
+
+	case key.Matches(msg, Keys.ServiceLogs):
+		svc := m.selectedServiceName()
+		if svc == "" {
+			return m, nil
+		}
+		m.cancelLogs()
+		m.appendOutput(fmt.Sprintf("[streaming logs for %s...]", svc))
+		ch, cancel := m.compose.Logs(context.Background(), svc)
+		m.logCancel = cancel
+		return m, readLogLine(ch)
+
+	case key.Matches(msg, Keys.ServiceShell):
+		svc := m.selectedServiceName()
+		if svc == "" {
+			return m, nil
+		}
+		c := m.compose.Shell(context.Background(), svc)
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			if err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[shell error: %v]", err)}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[shell for %s closed]", svc)}
+		})
 	}
+
 	return m, nil
 }
 
-// updateContext handles key presses when the context panel has focus.
-func (m *Model) updateContext(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch m.activeNav {
-	case NavServices:
-		return m.updateServiceKeys(msg)
-	case NavProjects:
-		return m.updateProjectKeys(msg)
-	case NavCommands:
-		return m.updateCommandKeys(msg)
+// handleSidebarEnter handles Enter on a sidebar entry.
+func (m *Model) handleSidebarEnter() (tea.Model, tea.Cmd) {
+	entry := m.cursorEntry()
+	if entry == nil {
+		return m, nil
 	}
+
+	switch entry.kind {
+	case entryService, entryProject:
+		name := entry.name
+		if m.expandedName == name {
+			m.expandedName = "" // collapse
+		} else {
+			m.expandedName = name // expand
+		}
+		m.buildEntries()
+		return m, nil
+
+	case entryCommand:
+		projectName := entry.project
+		cmd := *entry.command
+		m.cancelLogs()
+		m.appendOutput(fmt.Sprintf("[running %s: %s]", cmd.Name, cmd.Run))
+		return m, m.runCommand(projectName, cmd)
+	}
+
 	return m, nil
 }
 
@@ -504,197 +774,100 @@ func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateServiceKeys handles keys for the service list.
-func (m *Model) updateServiceKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, Keys.Down):
-		if m.serviceCursor < len(m.services)-1 {
-			m.serviceCursor++
-		}
-	case key.Matches(msg, Keys.Up):
-		if m.serviceCursor > 0 {
-			m.serviceCursor--
-		}
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
 
-	case key.Matches(msg, Keys.ServiceUp):
-		if len(m.services) == 0 {
-			return m, nil
-		}
-		svc := m.services[m.serviceCursor].Name
-		profiles := m.activeProfiles()
-		compose := m.compose
-		m.appendOutput(fmt.Sprintf("[starting %s...]", svc))
-		return m, func() tea.Msg {
-			if err := compose.Up(context.Background(), profiles, svc); err != nil {
-				return OutputLineMsg{Line: fmt.Sprintf("[error starting %s: %v]", svc, err)}
-			}
-			return OutputLineMsg{Line: fmt.Sprintf("[%s started]", svc)}
-		}
-
-	case key.Matches(msg, Keys.ServiceDown):
-		if len(m.services) == 0 {
-			return m, nil
-		}
-		svc := m.services[m.serviceCursor].Name
-		compose := m.compose
-		m.appendOutput(fmt.Sprintf("[stopping %s...]", svc))
-		return m, func() tea.Msg {
-			if err := compose.Stop(context.Background(), svc); err != nil {
-				return OutputLineMsg{Line: fmt.Sprintf("[error stopping %s: %v]", svc, err)}
-			}
-			return OutputLineMsg{Line: fmt.Sprintf("[%s stopped]", svc)}
-		}
-
-	case key.Matches(msg, Keys.ServiceRebuild):
-		if len(m.services) == 0 {
-			return m, nil
-		}
-		svc := m.services[m.serviceCursor].Name
-		compose := m.compose
-		m.appendOutput(fmt.Sprintf("[rebuilding %s...]", svc))
-		return m, func() tea.Msg {
-			if err := compose.Build(context.Background(), svc); err != nil {
-				return OutputLineMsg{Line: fmt.Sprintf("[error rebuilding %s: %v]", svc, err)}
-			}
-			return OutputLineMsg{Line: fmt.Sprintf("[%s rebuilt]", svc)}
-		}
-
-	case key.Matches(msg, Keys.ServiceLogs):
-		if len(m.services) == 0 {
-			return m, nil
-		}
-		svc := m.services[m.serviceCursor].Name
-		m.cancelLogs()
-		m.appendOutput(fmt.Sprintf("[streaming logs for %s...]", svc))
-		ch, cancel := m.compose.Logs(context.Background(), svc)
-		m.logCancel = cancel
-		return m, readLogLine(ch)
-
-	case key.Matches(msg, Keys.ServiceShell):
-		if len(m.services) == 0 {
-			return m, nil
-		}
-		svc := m.services[m.serviceCursor].Name
-		c := m.compose.Shell(context.Background(), svc)
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
-			if err != nil {
-				return OutputLineMsg{Line: fmt.Sprintf("[shell error: %v]", err)}
-			}
-			return OutputLineMsg{Line: fmt.Sprintf("[shell for %s closed]", svc)}
-		})
+// View renders the entire TUI.
+func (m *Model) View() string {
+	if m.width == 0 || m.height == 0 {
+		return "loading..."
 	}
-	return m, nil
+
+	if m.showHelp {
+		return m.renderHelp()
+	}
+
+	sidebar := m.renderSidebar()
+	output := m.renderOutputPanel()
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, output)
+
+	statusBar := m.renderStatusBar()
+	dashboard := lipgloss.JoinVertical(lipgloss.Left, panels, statusBar)
+
+	if m.showOverlay {
+		overlay := m.renderOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		)
+	}
+
+	return dashboard
 }
 
-// updateProjectKeys handles keys for the project list (stub for now).
-func (m *Model) updateProjectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, Keys.Down):
-		if m.projectCursor < len(m.projectNames)-1 {
-			m.projectCursor++
-		}
-	case key.Matches(msg, Keys.Up):
-		if m.projectCursor > 0 {
-			m.projectCursor--
-		}
-	case key.Matches(msg, Keys.Enter):
-		if m.projectCursor < len(m.projectNames) {
-			m.selectedProject = m.projectNames[m.projectCursor]
-			m.commandCursor = 0
-			m.activeNav = NavCommands
-		}
-	}
-	return m, nil
-}
-
-// updateCommandKeys handles keys for the command list.
-func (m *Model) updateCommandKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.selectedProject == "" {
-		return m, nil
-	}
-	proj, ok := m.cfg.Projects[m.selectedProject]
-	if !ok || len(proj.Commands) == 0 {
-		return m, nil
-	}
-
-	switch {
-	case key.Matches(msg, Keys.Down):
-		if m.commandCursor < len(proj.Commands)-1 {
-			m.commandCursor++
-		}
-	case key.Matches(msg, Keys.Up):
-		if m.commandCursor > 0 {
-			m.commandCursor--
-		}
-	case key.Matches(msg, Keys.Enter):
-		if m.commandCursor < len(proj.Commands) {
-			cmd := proj.Commands[m.commandCursor]
-			m.cancelLogs()
-			m.appendOutput(fmt.Sprintf("[running %s: %s]", cmd.Name, cmd.Run))
-			return m, m.runCommand(m.selectedProject, cmd)
-		}
-	}
-	return m, nil
-}
-
-// renderNav renders the left navigation panel.
-func (m *Model) renderNav() string {
-	sections := []struct {
-		label string
-		nav   NavSection
-	}{
-		{"Services", NavServices},
-		{"Projects", NavProjects},
-		{"Commands", NavCommands},
-	}
-
+// renderSidebar renders the left sidebar panel.
+func (m *Model) renderSidebar() string {
 	var lines []string
-	lines = append(lines, titleStyle.Render("attuine"))
+
+	// Profile header.
+	lines = append(lines, profileHeaderStyle.Render("Profile: "+m.activeProfile+"  [p]"))
+	// Bulk action hints.
+	lines = append(lines, bulkHintStyle.Render("[U]p All  [D]own  [R]ebuild"))
+	// Blank line.
 	lines = append(lines, "")
 
-	for _, s := range sections {
-		style := navInactive
-		prefix := "  "
-		if s.nav == m.activeNav {
-			style = navActive
-			prefix = "▸ "
+	// Render each sidebar entry.
+	for i, entry := range m.entries {
+		isCursor := i == m.cursor
+
+		switch entry.kind {
+		case entryService:
+			indicator := StatusIndicator(entry.state)
+			name := entry.name
+			if len(entry.ports) > 0 {
+				name += " " + strings.Join(entry.ports, ",")
+			}
+			prefix := "  "
+			style := navInactive
+			if isCursor {
+				prefix = "▸ "
+				style = selectedStyle
+			}
+			lines = append(lines, fmt.Sprintf("%s %s", indicator, style.Render(prefix+name)))
+
+		case entryCommand:
+			prefix := "    "
+			style := commandItemStyle
+			if isCursor {
+				prefix = "  ▸ "
+				style = selectedStyle
+			}
+			lines = append(lines, style.Render(prefix+entry.name))
+
+		case entryHeader:
+			lines = append(lines, sectionDividerStyle.Render("── "+entry.name+" ──"))
+
+		case entryProject:
+			prefix := "  "
+			style := navInactive
+			if isCursor {
+				prefix = "▸ "
+				style = selectedStyle
+			}
+			lines = append(lines, style.Render(prefix+entry.name))
 		}
-		lines = append(lines, style.Render(prefix+s.label))
 	}
 
 	content := strings.Join(lines, "\n")
 
 	border := unfocusedBorder
-	if m.activePanel == PanelNav {
+	if m.activePanel == PanelSidebar {
 		border = focusedBorder
 	}
 
 	return border.
-		Width(navWidth).
-		Height(m.contentHeight).
-		Render(content)
-}
-
-// renderContext renders the middle context panel based on activeNav.
-func (m *Model) renderContext() string {
-	var content string
-
-	switch m.activeNav {
-	case NavServices:
-		content = m.renderServiceList()
-	case NavProjects:
-		content = m.renderProjectList()
-	case NavCommands:
-		content = m.renderCommandList()
-	}
-
-	border := unfocusedBorder
-	if m.activePanel == PanelContext {
-		border = focusedBorder
-	}
-
-	return border.
-		Width(m.contextWidth).
+		Width(m.sidebarWidth).
 		Height(m.contentHeight).
 		Render(content)
 }
@@ -712,89 +885,39 @@ func (m *Model) renderOutputPanel() string {
 		Render(m.output.View())
 }
 
-// renderServiceList renders the list of services with status indicators.
-func (m *Model) renderServiceList() string {
-	if len(m.services) == 0 {
-		return titleStyle.Render("Services") + "\n\n" +
-			navInactive.Render("  (no services)")
-	}
+// renderStatusBar renders the bottom status bar.
+func (m *Model) renderStatusBar() string {
+	var parts []string
 
-	var lines []string
-	lines = append(lines, titleStyle.Render("Services"))
-	lines = append(lines, "")
-
-	for i, svc := range m.services {
-		indicator := StatusIndicator(svc.State)
-		name := svc.Name
-		if len(svc.Ports) > 0 {
-			name += " :" + strings.Join(svc.Ports, ",:")
+	// Contextual hints based on cursor
+	entry := m.cursorEntry()
+	if entry != nil {
+		switch entry.kind {
+		case entryService:
+			parts = append(parts, actionKeyStyle.Render("u/d/r")+" "+actionDescStyle.Render("service"))
+			parts = append(parts, actionKeyStyle.Render("U/D/R")+" "+actionDescStyle.Render("profile"))
+			parts = append(parts, actionKeyStyle.Render("l")+" "+actionDescStyle.Render("logs"))
+			parts = append(parts, actionKeyStyle.Render("s")+" "+actionDescStyle.Render("shell"))
+		case entryCommand:
+			parts = append(parts, actionKeyStyle.Render("enter")+" "+actionDescStyle.Render("run"))
+			parts = append(parts, actionKeyStyle.Render("esc")+" "+actionDescStyle.Render("back"))
+		case entryProject:
+			parts = append(parts, actionKeyStyle.Render("enter")+" "+actionDescStyle.Render("expand"))
+			parts = append(parts, actionKeyStyle.Render("U/D/R")+" "+actionDescStyle.Render("profile"))
 		}
-
-		style := navInactive
-		prefix := "  "
-		if i == m.serviceCursor {
-			style = selectedStyle
-			prefix = "▸ "
-		}
-
-		lines = append(lines, fmt.Sprintf("%s %s", indicator, style.Render(prefix+name)))
+	} else {
+		parts = append(parts, actionKeyStyle.Render("U/D/R")+" "+actionDescStyle.Render("profile"))
 	}
 
-	return strings.Join(lines, "\n")
-}
+	parts = append(parts, actionKeyStyle.Render("?")+" "+actionDescStyle.Render("help"))
 
-// renderProjectList renders the list of configured projects.
-func (m *Model) renderProjectList() string {
-	if len(m.projectNames) == 0 {
-		return titleStyle.Render("Projects") + "\n\n" +
-			navInactive.Render("  (no projects)")
+	if m.activeProfile != "" {
+		parts = append(parts, actionKeyStyle.Render("profile:")+" "+actionDescStyle.Render(m.activeProfile))
 	}
+	parts = append(parts, actionDescStyle.Render(fmt.Sprintf("%d/%d running", m.runningCount, len(m.services))))
 
-	var lines []string
-	lines = append(lines, titleStyle.Render("Projects"))
-	lines = append(lines, "")
-
-	for i, name := range m.projectNames {
-		style := navInactive
-		prefix := "  "
-		if i == m.projectCursor {
-			style = selectedStyle
-			prefix = "▸ "
-		}
-		lines = append(lines, style.Render(prefix+name))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-// renderCommandList renders the commands for the selected project.
-func (m *Model) renderCommandList() string {
-	if m.selectedProject == "" {
-		return titleStyle.Render("Commands") + "\n\n" +
-			navInactive.Render("  (select a project first)")
-	}
-
-	proj, ok := m.cfg.Projects[m.selectedProject]
-	if !ok || len(proj.Commands) == 0 {
-		return titleStyle.Render("Commands: "+m.selectedProject) + "\n\n" +
-			navInactive.Render("  (no commands)")
-	}
-
-	var lines []string
-	lines = append(lines, titleStyle.Render("Commands: "+m.selectedProject))
-	lines = append(lines, "")
-
-	for i, cmd := range proj.Commands {
-		style := navInactive
-		prefix := "  "
-		if i == m.commandCursor {
-			style = selectedStyle
-			prefix = "▸ "
-		}
-		lines = append(lines, style.Render(prefix+cmd.Name))
-	}
-
-	return strings.Join(lines, "\n")
+	bar := strings.Join(parts, "  │  ")
+	return statusBarStyle.Width(m.width).Render(bar)
 }
 
 // renderOverlay renders a centered overlay dialog (e.g., profile picker).
@@ -852,42 +975,39 @@ func (m *Model) renderHelp() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderStatusBar renders the bottom status bar.
-func (m *Model) renderStatusBar() string {
-	var parts []string
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
 
-	// Help hint.
-	parts = append(parts, actionKeyStyle.Render("?")+" "+actionDescStyle.Render("help"))
-
-	// Active profile.
-	if m.activeProfile != "" {
-		parts = append(parts, actionKeyStyle.Render("profile:")+" "+actionDescStyle.Render(m.activeProfile))
+func (m *Model) recalcLayout() {
+	m.contentHeight = m.height - 3
+	if m.contentHeight < 1 {
+		m.contentHeight = 1
 	}
-
-	// Running count.
-	parts = append(parts, actionDescStyle.Render(fmt.Sprintf("%d/%d running", m.runningCount, len(m.services))))
-
-	// Nav hints.
-	parts = append(parts, actionKeyStyle.Render("1")+" "+actionDescStyle.Render("svc")+
-		" "+actionKeyStyle.Render("2")+" "+actionDescStyle.Render("proj")+
-		" "+actionKeyStyle.Render("3")+" "+actionDescStyle.Render("cmd"))
-
-	bar := strings.Join(parts, "  │  ")
-
-	return statusBarStyle.
-		Width(m.width).
-		Render(bar)
+	m.sidebarWidth = m.width * 30 / 100
+	if m.sidebarWidth < 25 {
+		m.sidebarWidth = 25
+	}
+	if m.sidebarWidth > 40 {
+		m.sidebarWidth = 40
+	}
+	m.outputWidth = m.width - m.sidebarWidth - 4
+	if m.outputWidth < 10 {
+		m.outputWidth = 10
+	}
 }
+
+// ---------------------------------------------------------------------------
+// Service status
+// ---------------------------------------------------------------------------
 
 // updateServices refreshes the internal service list from a status poll result.
 func (m *Model) updateServices(statuses []docker.ServiceStatus) {
-	// Build a map of current statuses.
 	statusMap := make(map[string]docker.ServiceStatus)
 	for _, s := range statuses {
 		statusMap[s.Service] = s
 	}
 
-	// Update existing services with new status, or mark as stopped.
 	m.runningCount = 0
 	for i := range m.services {
 		if s, ok := statusMap[m.services[i].Name]; ok {
@@ -904,58 +1024,23 @@ func (m *Model) updateServices(statuses []docker.ServiceStatus) {
 	}
 
 	// Add any new services we haven't seen before.
-	for _, s := range statuses {
-		if _, exists := statusMap[s.Service]; exists {
-			svc := Service{Name: s.Service, State: s.State, Ports: s.Ports}
-			m.services = append(m.services, svc)
-			if s.State == "running" {
-				m.runningCount++
-			}
+	for name, s := range statusMap {
+		svc := Service{Name: name, State: s.State, Ports: s.Ports}
+		m.services = append(m.services, svc)
+		if s.State == "running" {
+			m.runningCount++
 		}
 	}
 
 	// Keep cursor in bounds.
-	if m.serviceCursor >= len(m.services) && len(m.services) > 0 {
-		m.serviceCursor = len(m.services) - 1
-	}
-}
-
-// appendOutput adds a line to the output buffer and updates the viewport.
-// The buffer is capped at 10000 lines to prevent unbounded memory growth.
-func (m *Model) appendOutput(line string) {
-	m.outputLines = append(m.outputLines, line)
-	if len(m.outputLines) > 10000 {
-		m.outputLines = m.outputLines[len(m.outputLines)-10000:]
-	}
-	content := strings.Join(m.outputLines, "\n")
-	m.output.SetContent(content)
-	m.output.GotoBottom()
-}
-
-// recalcLayout recalculates panel dimensions based on terminal size.
-func (m *Model) recalcLayout() {
-	// Reserve 1 row for status bar, 2 for borders top/bottom on each panel.
-	m.contentHeight = m.height - 3
-	if m.contentHeight < 1 {
-		m.contentHeight = 1
+	if m.cursor >= len(m.entries) && len(m.entries) > 0 {
+		m.cursor = len(m.entries) - 1
 	}
 
-	// Nav panel takes navWidth + 2 for borders.
-	remaining := m.width - navWidth - 4 // -4 for borders on nav and spacing
-
-	// Context panel gets ~30% of remaining, output gets the rest.
-	m.contextWidth = remaining * 30 / 100
-	if m.contextWidth < 15 {
-		m.contextWidth = 15
-	}
-	m.outputWidth = remaining - m.contextWidth - 4 // -4 for borders on context and output
-	if m.outputWidth < 10 {
-		m.outputWidth = 10
-	}
+	m.buildEntries()
 }
 
 // pollStatus polls docker compose for current service statuses.
-// This is a tea.Cmd — it takes no arguments and returns a tea.Msg.
 func (m *Model) pollStatus() tea.Msg {
 	statuses, err := m.compose.Status(context.Background())
 	return ServiceStatusMsg{Statuses: statuses, Err: err}
@@ -968,14 +1053,16 @@ func (m *Model) scheduleStatusPoll() tea.Cmd {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// Profile switching
+// ---------------------------------------------------------------------------
+
 // switchProfile returns a tea.Cmd that starts the profile switch by downing
-// the current stack. The rest of the flow (hooks, up) is driven by message
-// handlers in Update forming a state machine.
+// the current stack. The rest of the flow is driven by message handlers.
 func (m *Model) switchProfile(profileName string) tea.Cmd {
 	compose := m.compose
 	cfg := m.cfg
 
-	// Find the profile config.
 	var profiles []string
 	for _, p := range cfg.Profiles {
 		if p.Name == profileName {
@@ -992,13 +1079,34 @@ func (m *Model) switchProfile(profileName string) tea.Cmd {
 	}
 }
 
-// handleProfileDown processes a completed compose down and either starts
-// running pre_up hooks or proceeds directly to compose up.
+// bringUpProfile starts the active profile without first bringing down
+// the current stack. It runs pre_up hooks then compose up.
+func (m *Model) bringUpProfile() tea.Cmd {
+	profiles := m.activeProfiles()
+	hooks := m.cfg.Hooks.PreUp
+	name := m.activeProfile // capture before closure
+	if len(hooks) > 0 {
+		return func() tea.Msg {
+			return HookStartMsg{
+				hook:      hooks[0],
+				remaining: hooks[1:],
+				profiles:  profiles,
+				name:      name,
+			}
+		}
+	}
+	compose := m.compose
+	return func() tea.Msg {
+		if err := compose.Up(context.Background(), profiles); err != nil {
+			return ProfileUpMsg{name: name, err: err}
+		}
+		return ProfileUpMsg{name: name}
+	}
+}
+
 func (m *Model) handleProfileDown(msg ProfileDownMsg) (tea.Model, tea.Cmd) {
 	hooks := m.cfg.Hooks.PreUp
 	if len(hooks) > 0 {
-		// Kick off the first hook via HookStartMsg; handleHookStart will
-		// run the command and start streaming its output.
 		return m, func() tea.Msg {
 			return HookStartMsg{
 				hook:      hooks[0],
@@ -1009,7 +1117,6 @@ func (m *Model) handleProfileDown(msg ProfileDownMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// No hooks — go straight to compose up.
 	compose := m.compose
 	return m, func() tea.Msg {
 		if err := compose.Up(context.Background(), msg.profiles); err != nil {
@@ -1019,7 +1126,6 @@ func (m *Model) handleProfileDown(msg ProfileDownMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleHookStart logs the hook start and begins streaming its output.
 func (m *Model) handleHookStart(msg HookStartMsg) (tea.Model, tea.Cmd) {
 	m.appendOutput(fmt.Sprintf("[running hook: %s...]", msg.hook.Name))
 	dir := m.cfg.Dir
@@ -1030,7 +1136,6 @@ func (m *Model) handleHookStart(msg HookStartMsg) (tea.Model, tea.Cmd) {
 		}
 		line, ok := <-ch
 		if !ok {
-			// Hook produced no output — proceed.
 			if len(msg.remaining) > 0 {
 				return HookStartMsg{
 					hook:      msg.remaining[0],
@@ -1051,19 +1156,11 @@ func (m *Model) handleHookStart(msg HookStartMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleHookStream appends one line of hook output and reads the next.
 func (m *Model) handleHookStream(msg HookStreamMsg) (tea.Model, tea.Cmd) {
 	m.appendOutput(msg.line)
 	return m, func() tea.Msg {
 		line, ok := <-msg.ch
 		if !ok {
-			// Channel closed — hook finished. Start next hook or signal done.
-			// TODO: Hook exit status is not checked here. If a hook exits
-			// non-zero, the runner sends "[exited with code N]" as the last
-			// line on the channel, but we currently proceed to the next hook
-			// regardless. To properly abort on failure, the runner would need
-			// to return exit status separately (e.g. via a struct or second
-			// channel).
 			if len(msg.remaining) > 0 {
 				return HookStartMsg{
 					hook:      msg.remaining[0],
@@ -1084,7 +1181,6 @@ func (m *Model) handleHookStream(msg HookStreamMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleHookDone runs compose up after all hooks have completed.
 func (m *Model) handleHookDone(msg HookDoneMsg) (tea.Model, tea.Cmd) {
 	m.appendOutput("[hooks completed]")
 	compose := m.compose
@@ -1096,14 +1192,44 @@ func (m *Model) handleHookDone(msg HookDoneMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleProfileUp finalises the profile switch and triggers a status poll.
 func (m *Model) handleProfileUp(msg ProfileUpMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.appendOutput(fmt.Sprintf("[profile switch error: %v]", msg.err))
 	} else {
 		m.appendOutput(fmt.Sprintf("[services started with profile %s]", msg.name))
 	}
+	// Save state on successful profile up.
+	if msg.err == nil {
+		m.saveProfileState(msg.name)
+	}
 	return m, m.pollStatus
+}
+
+// ---------------------------------------------------------------------------
+// State persistence
+// ---------------------------------------------------------------------------
+
+func (m *Model) saveProfileState(profileName string) {
+	if m.stateDir != "" {
+		s := &state.State{LastProfile: profileName}
+		_ = s.Save(m.stateDir) // best-effort
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Output & logging
+// ---------------------------------------------------------------------------
+
+// appendOutput adds a line to the output buffer and updates the viewport.
+// The buffer is capped at 10000 lines to prevent unbounded memory growth.
+func (m *Model) appendOutput(line string) {
+	m.outputLines = append(m.outputLines, line)
+	if len(m.outputLines) > 10000 {
+		m.outputLines = m.outputLines[len(m.outputLines)-10000:]
+	}
+	content := strings.Join(m.outputLines, "\n")
+	m.output.SetContent(content)
+	m.output.GotoBottom()
 }
 
 // readLogLine returns a tea.Cmd that reads one line from a log channel.
@@ -1158,7 +1284,6 @@ func (m *Model) runCommand(projectName string, cmd config.Command) tea.Cmd {
 	}
 
 	if cmd.Interactive {
-		// Interactive commands suspend the TUI.
 		if cmd.Service != "" {
 			c := compose.ExecInteractive(context.Background(), cmd.Service, cmd.Run)
 			return tea.ExecProcess(c, func(err error) tea.Msg {
@@ -1177,7 +1302,6 @@ func (m *Model) runCommand(projectName string, cmd config.Command) tea.Cmd {
 		})
 	}
 
-	// Non-interactive commands stream output.
 	if cmd.Service != "" {
 		ch, cancel := compose.Exec(context.Background(), cmd.Service, cmd.Run)
 		m.logCancel = cancel

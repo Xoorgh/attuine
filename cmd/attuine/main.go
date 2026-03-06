@@ -9,6 +9,7 @@ import (
 
 	"oxorg/attuine/internal/config"
 	"oxorg/attuine/internal/docker"
+	"oxorg/attuine/internal/state"
 	"oxorg/attuine/internal/tui"
 )
 
@@ -43,7 +44,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
-	model := tui.New(cfg)
+	stateDir, _ := state.DefaultDir()
+
+	model := tui.New(cfg, stateDir)
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := p.Run(); err != nil {

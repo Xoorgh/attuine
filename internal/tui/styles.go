@@ -48,6 +48,23 @@ var (
 
 	actionDescStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("250"))
+
+	profileHeaderStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("62")).
+		PaddingLeft(1)
+
+	bulkHintStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		PaddingLeft(1)
+
+	sectionDividerStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		PaddingLeft(1)
+
+	commandItemStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("250")).
+		PaddingLeft(4)
 )
 
 func StatusIndicator(state string) string {
