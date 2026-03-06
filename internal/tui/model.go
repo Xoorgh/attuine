@@ -69,9 +69,39 @@ type OutputDoneMsg struct{}
 // TickMsg is fired by the periodic status poll timer.
 type TickMsg struct{}
 
-// ProfileSwitchMsg signals that a profile switch has completed.
-type ProfileSwitchMsg struct {
-	Err error
+// ProfileDownMsg signals compose down completed during a profile switch.
+type ProfileDownMsg struct {
+	profiles []string
+	name     string
+}
+
+// HookStartMsg signals the start of a pre_up hook.
+type HookStartMsg struct {
+	hook      config.Hook
+	remaining []config.Hook
+	profiles  []string
+	name      string
+}
+
+// HookStreamMsg carries one line of hook output and the channel for the next.
+type HookStreamMsg struct {
+	line      string
+	ch        <-chan string
+	remaining []config.Hook
+	profiles  []string
+	name      string
+}
+
+// HookDoneMsg signals all pre_up hooks have completed.
+type HookDoneMsg struct {
+	profiles []string
+	name     string
+}
+
+// ProfileUpMsg signals compose up completed during a profile switch.
+type ProfileUpMsg struct {
+	name string
+	err  error
 }
 
 // logBatchMsg carries a single log line and the channel to read the next from.
@@ -249,14 +279,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.pollStatus)
 		return m, tea.Batch(cmds...)
 
-	case ProfileSwitchMsg:
-		if msg.Err != nil {
-			m.appendOutput(fmt.Sprintf("[profile switch error: %v]", msg.Err))
-		} else {
-			m.appendOutput(fmt.Sprintf("[switched to profile: %s]", m.activeProfile))
-		}
-		m.showOverlay = false
-		return m, nil
+	case ProfileDownMsg:
+		return m.handleProfileDown(msg)
+
+	case HookStartMsg:
+		return m.handleHookStart(msg)
+
+	case HookStreamMsg:
+		return m.handleHookStream(msg)
+
+	case HookDoneMsg:
+		return m.handleHookDone(msg)
+
+	case ProfileUpMsg:
+		return m.handleProfileUp(msg)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -431,6 +467,8 @@ func (m *Model) updateOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			selected := m.profileNames[m.overlayCursor]
 			if selected != m.activeProfile {
 				m.activeProfile = selected
+				m.showOverlay = false
+				m.appendOutput(fmt.Sprintf("[switching profile to %s...]", selected))
 				return m, m.switchProfile(selected)
 			}
 			m.showOverlay = false
@@ -881,8 +919,9 @@ func (m *Model) scheduleStatusPoll() tea.Cmd {
 	})
 }
 
-// switchProfile returns a tea.Cmd that downs the current stack and brings up
-// the new profile, running any pre_up hooks.
+// switchProfile returns a tea.Cmd that starts the profile switch by downing
+// the current stack. The rest of the flow (hooks, up) is driven by message
+// handlers in Update forming a state machine.
 func (m *Model) switchProfile(profileName string) tea.Cmd {
 	compose := m.compose
 	cfg := m.cfg
@@ -897,20 +936,119 @@ func (m *Model) switchProfile(profileName string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		ctx := context.Background()
-
-		// Down current stack.
-		if err := compose.Down(ctx); err != nil {
-			return ProfileSwitchMsg{Err: err}
+		if err := compose.Down(context.Background()); err != nil {
+			return ProfileUpMsg{name: profileName, err: fmt.Errorf("compose down: %w", err)}
 		}
-
-		// Up with new profile.
-		if err := compose.Up(ctx, profiles); err != nil {
-			return ProfileSwitchMsg{Err: err}
-		}
-
-		return ProfileSwitchMsg{}
+		return ProfileDownMsg{profiles: profiles, name: profileName}
 	}
+}
+
+// handleProfileDown processes a completed compose down and either starts
+// running pre_up hooks or proceeds directly to compose up.
+func (m *Model) handleProfileDown(msg ProfileDownMsg) (tea.Model, tea.Cmd) {
+	hooks := m.cfg.Hooks.PreUp
+	if len(hooks) > 0 {
+		// Kick off the first hook via HookStartMsg; handleHookStart will
+		// run the command and start streaming its output.
+		return m, func() tea.Msg {
+			return HookStartMsg{
+				hook:      hooks[0],
+				remaining: hooks[1:],
+				profiles:  msg.profiles,
+				name:      msg.name,
+			}
+		}
+	}
+
+	// No hooks — go straight to compose up.
+	compose := m.compose
+	return m, func() tea.Msg {
+		if err := compose.Up(context.Background(), msg.profiles); err != nil {
+			return ProfileUpMsg{name: msg.name, err: err}
+		}
+		return ProfileUpMsg{name: msg.name}
+	}
+}
+
+// handleHookStart logs the hook start and begins streaming its output.
+func (m *Model) handleHookStart(msg HookStartMsg) (tea.Model, tea.Cmd) {
+	m.appendOutput(fmt.Sprintf("[running hook: %s...]", msg.hook.Name))
+	dir := m.cfg.Dir
+	return m, func() tea.Msg {
+		ch, err := runner.RunHost(context.Background(), dir, msg.hook.Run)
+		if err != nil {
+			return ProfileUpMsg{name: msg.name, err: fmt.Errorf("hook %s: %w", msg.hook.Name, err)}
+		}
+		line, ok := <-ch
+		if !ok {
+			// Hook produced no output — proceed.
+			if len(msg.remaining) > 0 {
+				return HookStartMsg{
+					hook:      msg.remaining[0],
+					remaining: msg.remaining[1:],
+					profiles:  msg.profiles,
+					name:      msg.name,
+				}
+			}
+			return HookDoneMsg{profiles: msg.profiles, name: msg.name}
+		}
+		return HookStreamMsg{
+			line:      line,
+			ch:        ch,
+			remaining: msg.remaining,
+			profiles:  msg.profiles,
+			name:      msg.name,
+		}
+	}
+}
+
+// handleHookStream appends one line of hook output and reads the next.
+func (m *Model) handleHookStream(msg HookStreamMsg) (tea.Model, tea.Cmd) {
+	m.appendOutput(msg.line)
+	return m, func() tea.Msg {
+		line, ok := <-msg.ch
+		if !ok {
+			// Channel closed — hook finished. Start next hook or signal done.
+			if len(msg.remaining) > 0 {
+				return HookStartMsg{
+					hook:      msg.remaining[0],
+					remaining: msg.remaining[1:],
+					profiles:  msg.profiles,
+					name:      msg.name,
+				}
+			}
+			return HookDoneMsg{profiles: msg.profiles, name: msg.name}
+		}
+		return HookStreamMsg{
+			line:      line,
+			ch:        msg.ch,
+			remaining: msg.remaining,
+			profiles:  msg.profiles,
+			name:      msg.name,
+		}
+	}
+}
+
+// handleHookDone runs compose up after all hooks have completed.
+func (m *Model) handleHookDone(msg HookDoneMsg) (tea.Model, tea.Cmd) {
+	m.appendOutput("[hooks completed]")
+	compose := m.compose
+	return m, func() tea.Msg {
+		if err := compose.Up(context.Background(), msg.profiles); err != nil {
+			return ProfileUpMsg{name: msg.name, err: err}
+		}
+		return ProfileUpMsg{name: msg.name}
+	}
+}
+
+// handleProfileUp finalises the profile switch and triggers a status poll.
+func (m *Model) handleProfileUp(msg ProfileUpMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.appendOutput(fmt.Sprintf("[profile switch error: %v]", msg.err))
+	} else {
+		m.appendOutput(fmt.Sprintf("[services started with profile %s]", msg.name))
+	}
+	return m, m.pollStatus
 }
 
 // readLogLine returns a tea.Cmd that reads one line from a log channel.
