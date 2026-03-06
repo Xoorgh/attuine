@@ -1,4 +1,4 @@
-.PHONY: build test lint clean
+.PHONY: build test lint clean install
 
 build:
 	go build -o bin/attuine ./cmd/attuine
@@ -11,3 +11,6 @@ lint:
 
 clean:
 	rm -rf bin/
+
+install:
+	go install ./cmd/attuine
