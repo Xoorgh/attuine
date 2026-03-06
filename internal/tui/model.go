@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -324,7 +323,18 @@ func (m *Model) View() string {
 	// Add status bar at the bottom.
 	statusBar := m.renderStatusBar()
 
-	return lipgloss.JoinVertical(lipgloss.Left, panels, statusBar)
+	dashboard := lipgloss.JoinVertical(lipgloss.Left, panels, statusBar)
+
+	// If overlay is active, render it centered on screen.
+	if m.showOverlay {
+		overlay := m.renderOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		)
+	}
+
+	return dashboard
 }
 
 // updateKeypress handles global key presses when no overlay is active.
@@ -375,12 +385,6 @@ func (m *Model) updateKeypress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-
-	case key.Matches(msg, Keys.Clear):
-		m.outputLines = nil
-		m.output.SetContent("")
-		m.output.GotoTop()
-		return m, nil
 	}
 
 	// Delegate to panel-specific handlers.
@@ -429,6 +433,10 @@ func (m *Model) updateContext(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // updateOutput handles key presses when the output panel has focus.
 func (m *Model) updateOutput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
+	case key.Matches(msg, Keys.Clear):
+		m.outputLines = nil
+		m.output.SetContent("")
+		m.output.GotoTop()
 	case key.Matches(msg, Keys.PageUp):
 		m.output.HalfViewUp()
 	case key.Matches(msg, Keys.PageDown):
@@ -513,10 +521,8 @@ func (m *Model) updateServiceKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		compose := m.compose
 		m.appendOutput(fmt.Sprintf("[stopping %s...]", svc))
 		return m, func() tea.Msg {
-			args := compose.BuildArgs("stop", svc)
-			cmd := exec.CommandContext(context.Background(), "docker", args...)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return OutputLineMsg{Line: fmt.Sprintf("[error stopping %s: %s: %v]", svc, strings.TrimSpace(string(out)), err)}
+			if err := compose.Stop(context.Background(), svc); err != nil {
+				return OutputLineMsg{Line: fmt.Sprintf("[error stopping %s: %v]", svc, err)}
 			}
 			return OutputLineMsg{Line: fmt.Sprintf("[%s stopped]", svc)}
 		}
@@ -841,7 +847,7 @@ func (m *Model) renderStatusBar() string {
 	}
 
 	// Running count.
-	parts = append(parts, actionDescStyle.Render(fmt.Sprintf("%d running", m.runningCount)))
+	parts = append(parts, actionDescStyle.Render(fmt.Sprintf("%d/%d running", m.runningCount, len(m.services))))
 
 	// Nav hints.
 	parts = append(parts, actionKeyStyle.Render("1")+" "+actionDescStyle.Render("svc")+
@@ -876,8 +882,12 @@ func (m *Model) updateServices(statuses []docker.ServiceStatus) {
 }
 
 // appendOutput adds a line to the output buffer and updates the viewport.
+// The buffer is capped at 10000 lines to prevent unbounded memory growth.
 func (m *Model) appendOutput(line string) {
 	m.outputLines = append(m.outputLines, line)
+	if len(m.outputLines) > 10000 {
+		m.outputLines = m.outputLines[len(m.outputLines)-10000:]
+	}
 	content := strings.Join(m.outputLines, "\n")
 	m.output.SetContent(content)
 	m.output.GotoBottom()
@@ -1009,6 +1019,12 @@ func (m *Model) handleHookStream(msg HookStreamMsg) (tea.Model, tea.Cmd) {
 		line, ok := <-msg.ch
 		if !ok {
 			// Channel closed — hook finished. Start next hook or signal done.
+			// TODO: Hook exit status is not checked here. If a hook exits
+			// non-zero, the runner sends "[exited with code N]" as the last
+			// line on the channel, but we currently proceed to the next hook
+			// regardless. To properly abort on failure, the runner would need
+			// to return exit status separately (e.g. via a struct or second
+			// channel).
 			if len(msg.remaining) > 0 {
 				return HookStartMsg{
 					hook:      msg.remaining[0],
@@ -1124,15 +1140,9 @@ func (m *Model) runCommand(projectName string, cmd config.Command) tea.Cmd {
 
 	// Non-interactive commands stream output.
 	if cmd.Service != "" {
-		return func() tea.Msg {
-			ch, cancel := compose.Exec(context.Background(), cmd.Service, cmd.Run)
-			_ = cancel // channel close handles cleanup
-			line, ok := <-ch
-			if !ok {
-				return OutputLineMsg{Line: "[done]"}
-			}
-			return cmdStreamMsg{line: line, ch: ch}
-		}
+		ch, cancel := compose.Exec(context.Background(), cmd.Service, cmd.Run)
+		m.logCancel = cancel
+		return readStream(ch)
 	}
 
 	return func() tea.Msg {

@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"oxorg/attuine/internal/config"
+	"oxorg/attuine/internal/docker"
 	"oxorg/attuine/internal/tui"
 )
 
@@ -36,6 +37,10 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if err := docker.CheckAvailable(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
 	model := tui.New(cfg)

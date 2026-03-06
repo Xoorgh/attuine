@@ -132,6 +132,16 @@ func (c *Compose) Down(ctx context.Context) error {
 	return nil
 }
 
+func (c *Compose) Stop(ctx context.Context, services ...string) error {
+	stopArgs := append([]string{"stop"}, services...)
+	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(stopArgs...)...)
+	cmd.Dir = c.dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker compose stop: %s: %w", string(out), err)
+	}
+	return nil
+}
+
 func (c *Compose) Build(ctx context.Context, services ...string) error {
 	buildArgs := append([]string{"build"}, services...)
 	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(buildArgs...)...)
