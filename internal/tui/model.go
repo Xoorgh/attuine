@@ -214,8 +214,15 @@ func New(cfg *config.Config) *Model {
 	return m
 }
 
-// Init starts the spinner and kicks off the first status poll.
+// Init starts the spinner, seeds the service list, and kicks off the first status poll.
 func (m *Model) Init() tea.Cmd {
+	// Seed service list from compose file so services appear even when stopped.
+	if names, err := m.compose.ListServices(context.Background()); err == nil {
+		for _, name := range names {
+			m.services = append(m.services, Service{Name: name})
+		}
+	}
+
 	return tea.Batch(
 		m.spinner.Tick,
 		m.pollStatus,
@@ -863,18 +870,39 @@ func (m *Model) renderStatusBar() string {
 
 // updateServices refreshes the internal service list from a status poll result.
 func (m *Model) updateServices(statuses []docker.ServiceStatus) {
-	m.services = make([]Service, len(statuses))
+	// Build a map of current statuses.
+	statusMap := make(map[string]docker.ServiceStatus)
+	for _, s := range statuses {
+		statusMap[s.Service] = s
+	}
+
+	// Update existing services with new status, or mark as stopped.
 	m.runningCount = 0
-	for i, s := range statuses {
-		m.services[i] = Service{
-			Name:  s.Service,
-			State: s.State,
-			Ports: s.Ports,
+	for i := range m.services {
+		if s, ok := statusMap[m.services[i].Name]; ok {
+			m.services[i].State = s.State
+			m.services[i].Ports = s.Ports
+			delete(statusMap, s.Service)
+		} else {
+			m.services[i].State = ""
+			m.services[i].Ports = nil
 		}
-		if s.State == "running" {
+		if m.services[i].State == "running" {
 			m.runningCount++
 		}
 	}
+
+	// Add any new services we haven't seen before.
+	for _, s := range statuses {
+		if _, exists := statusMap[s.Service]; exists {
+			svc := Service{Name: s.Service, State: s.State, Ports: s.Ports}
+			m.services = append(m.services, svc)
+			if s.State == "running" {
+				m.runningCount++
+			}
+		}
+	}
+
 	// Keep cursor in bounds.
 	if m.serviceCursor >= len(m.services) && len(m.services) > 0 {
 		m.serviceCursor = len(m.services) - 1

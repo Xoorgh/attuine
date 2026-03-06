@@ -93,6 +93,25 @@ func ParseStatus(lines []string) ([]ServiceStatus, error) {
 	return statuses, nil
 }
 
+// ListServices returns all service names defined in the compose file.
+func (c *Compose) ListServices(ctx context.Context) ([]string, error) {
+	args := c.BuildArgs("config", "--services")
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = c.dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker compose config --services: %w", err)
+	}
+	var services []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			services = append(services, line)
+		}
+	}
+	return services, nil
+}
+
 func (c *Compose) Status(ctx context.Context) ([]ServiceStatus, error) {
 	args := c.BuildArgs("ps", "--format", "json")
 	cmd := exec.CommandContext(ctx, "docker", args...)
