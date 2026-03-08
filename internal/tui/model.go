@@ -150,6 +150,10 @@ func New(cfg *config.Config, stateDir string) *Model {
 
 	m.views[ViewServices] = NewServiceView(cfg, stateDir, &m.activePanel)
 
+	if len(cfg.Repos) > 0 {
+		m.views[ViewGit] = NewGitView(cfg, &m.activePanel)
+	}
+
 	return m
 }
 

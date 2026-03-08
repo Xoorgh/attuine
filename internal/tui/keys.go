@@ -64,6 +64,19 @@ var Keys = KeyMap{
 	Cancel:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 }
 
+// GitKeyMap holds git-view-specific key bindings.
+type GitKeyMap struct {
+	SyncAll      key.Binding
+	CreateBranch key.Binding
+	CommitSubs   key.Binding
+}
+
+var gitKeys = GitKeyMap{
+	SyncAll:      key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sync all")),
+	CreateBranch: key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "create branch")),
+	CommitSubs:   key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "commit subs")),
+}
+
 func (k KeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Help, k.Quit, k.Tab, k.ViewToggle, k.Profile}
 }
