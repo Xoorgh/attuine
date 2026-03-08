@@ -148,7 +148,7 @@ func (gv *GitView) Update(msg tea.Msg) (View, tea.Cmd, bool) {
 
 	case GitOutputLineMsg:
 		gv.appendOutput(msg.Line)
-		return gv, nil, true
+		return gv, gv.pollAllStatuses, true
 
 	case gitSyncStepMsg:
 		gv.appendOutput(msg.line)
@@ -681,16 +681,33 @@ func (gv *GitView) syncRepo(idx, synced, skipped int, skipNames []string) tea.Cm
 
 func (gv *GitView) commitSubmodules() tea.Cmd {
 	cfg := gv.cfg
+
+	// Verify a parent repo (path=".") is configured.
+	hasParent := false
+	for _, repo := range cfg.Repos {
+		if repo.Path == "." {
+			hasParent = true
+			break
+		}
+	}
+	if !hasParent {
+		return func() tea.Msg {
+			return GitOutputLineMsg{Line: "[commit subs: error — no parent repo configured (need a repo with path: .)]"}
+		}
+	}
+
 	return func() tea.Msg {
 		ctx := context.Background()
 		parentDir := cfg.Dir
 
-		// Stage all repo paths (submodule pointers) in the parent repo.
+		// Stage submodule paths only (exclude the parent repo itself).
 		var paths []string
 		for _, repo := range cfg.Repos {
+			if repo.Path == "." {
+				continue
+			}
 			p := repo.Path
 			if filepath.IsAbs(p) {
-				// Make relative to parent dir for staging.
 				rel, err := filepath.Rel(parentDir, p)
 				if err != nil {
 					p = repo.Path

@@ -174,15 +174,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.recalcLayout()
-		// Pass to active view so it can update viewport sizes.
-		v, cmd, _ := m.currentView().Update(msg)
-		m.views[m.activeView] = v
-		return m, cmd
+		// Pass to all views so they can update viewport sizes.
+		for kind, view := range m.views {
+			v, _, _ := view.Update(msg)
+			m.views[kind] = v
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		if m.showHelp {
 			m.showHelp = false
 			return m, nil
+		}
+
+		// When a view overlay is active, only allow ctrl+c quit and
+		// delegate everything else to the view (so typing works).
+		if view := m.currentView(); view != nil && view.Overlay() != "" {
+			if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))) {
+				return m, tea.Quit
+			}
+			v, cmd, _ := view.Update(msg)
+			m.views[m.activeView] = v
+			return m, cmd
 		}
 
 		// Shell-level keys.
