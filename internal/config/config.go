@@ -16,6 +16,7 @@ type Config struct {
 	Hooks       Hooks              `yaml:"hooks"`
 	Profiles    []Profile          `yaml:"profiles"`
 	Projects    map[string]Project `yaml:"projects"`
+	Repos       map[string]Repo    `yaml:"repos"`
 	Dir         string             `yaml:"-"`
 }
 
@@ -38,6 +39,11 @@ type Project struct {
 	Commands []Command `yaml:"commands"`
 }
 
+type Repo struct {
+	Path          string `yaml:"path"`
+	DefaultBranch string `yaml:"default_branch"`
+}
+
 type Command struct {
 	Name        string `yaml:"name"`
 	Run         string `yaml:"run"`
@@ -58,6 +64,13 @@ func Load(path string) (*Config, error) {
 
 	if cfg.ComposeFile == "" {
 		return nil, fmt.Errorf("compose_file is required in %s", path)
+	}
+
+	for name, repo := range cfg.Repos {
+		if repo.DefaultBranch == "" {
+			repo.DefaultBranch = "master"
+			cfg.Repos[name] = repo
+		}
 	}
 
 	cfg.Dir = filepath.Dir(path)
