@@ -18,7 +18,7 @@ man: build
 	mkdir -p doc/man
 	./bin/attuine man doc/man/
 
-install: build man
+install: bin/attuine doc/man/attuine.1
 	install -Dm755 bin/attuine $(DESTDIR)$(PREFIX)/bin/attuine
 	install -Dm644 doc/man/attuine.1 $(DESTDIR)$(PREFIX)/share/man/man1/attuine.1
 
