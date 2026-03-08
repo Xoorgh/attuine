@@ -3,10 +3,11 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 type KeyMap struct {
-	Quit    key.Binding
-	Help    key.Binding
-	Tab     key.Binding
-	Profile key.Binding
+	Quit       key.Binding
+	Help       key.Binding
+	Tab        key.Binding
+	ViewToggle key.Binding
+	Profile    key.Binding
 
 	Up    key.Binding
 	Down  key.Binding
@@ -35,10 +36,11 @@ type KeyMap struct {
 }
 
 var Keys = KeyMap{
-	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-	Tab:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch panel")),
-	Profile: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "profiles")),
+	Quit:       key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	Help:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+	Tab:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch panel")),
+	ViewToggle: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "switch view")),
+	Profile:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "profiles")),
 
 	Up:    key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
 	Down:  key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
@@ -57,18 +59,18 @@ var Keys = KeyMap{
 	Clear:    key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clear")),
 	PageUp:   key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
 	PageDown: key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down")),
-	GoTop:    key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
-	GoBottom: key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+	GoTop:    key.NewBinding(key.WithKeys("home"), key.WithHelp("home", "top")),
+	GoBottom: key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "bottom")),
 	Cancel:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 }
 
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Help, k.Quit, k.Tab, k.Profile}
+	return []key.Binding{k.Help, k.Quit, k.Tab, k.ViewToggle, k.Profile}
 }
 
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Quit, k.Help, k.Tab, k.Profile},
+		{k.Quit, k.Help, k.Tab, k.ViewToggle, k.Profile},
 		{k.Up, k.Down, k.Enter, k.Cancel},
 		{k.ServiceUp, k.ServiceDown, k.ServiceRebuild, k.ServiceLogs, k.ServiceShell},
 		{k.BulkUp, k.BulkDown, k.BulkRebuild},
