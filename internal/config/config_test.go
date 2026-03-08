@@ -114,6 +114,46 @@ func TestLoad_InvalidYAML(t *testing.T) {
 	}
 }
 
+func TestLoad_WithRepos(t *testing.T) {
+	yaml := `
+compose_file: dev/docker-compose.yml
+
+repos:
+  myapp:
+    path: ./myapp
+    default_branch: main
+  lib:
+    path: ./lib
+`
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "attuine.yml"), []byte(yaml), 0644)
+
+	cfg, err := config.Load(filepath.Join(dir, "attuine.yml"))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if len(cfg.Repos) != 2 {
+		t.Fatalf("len(Repos) = %d, want 2", len(cfg.Repos))
+	}
+
+	myapp, ok := cfg.Repos["myapp"]
+	if !ok {
+		t.Fatal("Repos[myapp] not found")
+	}
+	if myapp.Path != "./myapp" {
+		t.Errorf("myapp.Path = %q, want %q", myapp.Path, "./myapp")
+	}
+	if myapp.DefaultBranch != "main" {
+		t.Errorf("myapp.DefaultBranch = %q, want %q", myapp.DefaultBranch, "main")
+	}
+
+	lib := cfg.Repos["lib"]
+	if lib.DefaultBranch != "master" {
+		t.Errorf("lib.DefaultBranch = %q, want %q (default)", lib.DefaultBranch, "master")
+	}
+}
+
 func TestDiscover(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "attuine.yml"), []byte("compose_file: dc.yml\n"), 0644)
