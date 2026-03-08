@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -13,6 +14,9 @@ import (
 	"oxorg/attuine/internal/state"
 	"oxorg/attuine/internal/tui"
 )
+
+// errPartialSuccess signals that some operations succeeded and some failed.
+var errPartialSuccess = errors.New("partial success")
 
 var (
 	cfgPath    string
@@ -90,6 +94,9 @@ func init() {
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		if errors.Is(err, errPartialSuccess) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }

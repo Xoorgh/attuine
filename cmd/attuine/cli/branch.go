@@ -32,6 +32,7 @@ var branchCreateCmd = &cobra.Command{
 		}
 
 		var results []branchResult
+		var errCount int
 		for _, name := range repos {
 			r := cfg.Repos[name]
 			dir := r.Path
@@ -41,6 +42,7 @@ var branchCreateCmd = &cobra.Command{
 
 			if err := git.CreateBranch(context.Background(), dir, branchName); err != nil {
 				results = append(results, branchResult{Repo: name, Action: "error", Branch: branchName, Error: err.Error()})
+				errCount++
 				if !jsonFlag {
 					fmt.Fprintf(os.Stderr, "✕ %s: %v\n", name, err)
 				}
@@ -53,7 +55,12 @@ var branchCreateCmd = &cobra.Command{
 		}
 
 		if jsonFlag {
-			return printJSON(map[string]any{"results": results})
+			if err := printJSON(map[string]any{"results": results}); err != nil {
+				return err
+			}
+		}
+		if errCount > 0 && errCount < len(repos) {
+			return errPartialSuccess
 		}
 		return nil
 	},
@@ -120,6 +127,7 @@ var branchCheckoutCmd = &cobra.Command{
 		}
 
 		var results []checkoutResult
+		var errCount int
 		for _, name := range repos {
 			r := cfg.Repos[name]
 			dir := r.Path
@@ -129,6 +137,7 @@ var branchCheckoutCmd = &cobra.Command{
 
 			if err := git.Checkout(context.Background(), dir, branchName); err != nil {
 				results = append(results, checkoutResult{Repo: name, Action: "error", Branch: branchName, Error: err.Error()})
+				errCount++
 				if !jsonFlag {
 					fmt.Fprintf(os.Stderr, "✕ %s: %v\n", name, err)
 				}
@@ -141,7 +150,12 @@ var branchCheckoutCmd = &cobra.Command{
 		}
 
 		if jsonFlag {
-			return printJSON(map[string]any{"results": results})
+			if err := printJSON(map[string]any{"results": results}); err != nil {
+				return err
+			}
+		}
+		if errCount > 0 && errCount < len(repos) {
+			return errPartialSuccess
 		}
 		return nil
 	},

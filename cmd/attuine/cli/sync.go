@@ -35,7 +35,11 @@ var syncCmd = &cobra.Command{
 			}
 			ctx := context.Background()
 
-			git.Fetch(ctx, dir)
+			if err := git.Fetch(ctx, dir); err != nil {
+				if !jsonFlag {
+					fmt.Fprintf(os.Stderr, "⚠ %s: fetch warning: %v\n", name, err)
+				}
+			}
 
 			clean, err := git.IsClean(ctx, dir)
 			if err != nil {
@@ -99,7 +103,7 @@ var syncCmd = &cobra.Command{
 		fmt.Println()
 
 		if skipped > 0 {
-			os.Exit(2)
+			return errPartialSuccess
 		}
 		return nil
 	},

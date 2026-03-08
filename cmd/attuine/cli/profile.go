@@ -11,6 +11,8 @@ import (
 	"oxorg/attuine/internal/runner"
 )
 
+const hookFailPrefix = "[exited with code "
+
 var profileCmd = &cobra.Command{
 	Use:   "profile",
 	Short: "Manage Docker Compose profiles",
@@ -76,10 +78,17 @@ var profileUpCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("hook %s: %w", hook.Name, err)
 			}
+			var hookFailed bool
 			for line := range ch {
+				if strings.HasPrefix(line, hookFailPrefix) {
+					hookFailed = true
+				}
 				if !jsonFlag {
 					fmt.Println(line)
 				}
+			}
+			if hookFailed {
+				return fmt.Errorf("hook %s failed", hook.Name)
 			}
 		}
 
