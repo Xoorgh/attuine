@@ -103,6 +103,14 @@ type HookDoneMsg struct {
 	name     string
 }
 
+// ComposeUpStreamMsg carries one line of compose up output and the channel for the next.
+type ComposeUpStreamMsg struct {
+	line      string
+	ch        <-chan string
+	name      string
+	profileUp bool // true: send ProfileUpMsg on done; false: send OutputLineMsg
+}
+
 // ProfileUpMsg signals compose up completed during a profile switch.
 type ProfileUpMsg struct {
 	name string

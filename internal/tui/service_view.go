@@ -195,6 +195,10 @@ func (sv *ServiceView) Update(msg tea.Msg) (View, tea.Cmd, bool) {
 		v, cmd := sv.handleHookDone(msg)
 		return v, cmd, true
 
+	case ComposeUpStreamMsg:
+		v, cmd := sv.handleComposeUpStream(msg)
+		return v, cmd, true
+
 	case ProfileUpMsg:
 		v, cmd := sv.handleProfileUp(msg)
 		return v, cmd, true
@@ -610,14 +614,8 @@ func (sv *ServiceView) updateSidebar(msg tea.KeyMsg) (View, tea.Cmd, bool) {
 			return sv, nil, true
 		}
 		profiles := sv.activeProfiles()
-		compose := sv.compose
 		sv.appendOutput(fmt.Sprintf("[starting %s...]", svc))
-		return sv, func() tea.Msg {
-			if err := compose.Up(context.Background(), profiles, svc); err != nil {
-				return OutputLineMsg{Line: fmt.Sprintf("[error starting %s: %v]", svc, err)}
-			}
-			return OutputLineMsg{Line: fmt.Sprintf("[%s started]", svc)}
-		}, true
+		return sv, sv.startComposeUp(profiles, svc, false, svc), true
 
 	case key.Matches(msg, Keys.ServiceDown):
 		svc := sv.selectedServiceName()
@@ -890,13 +888,7 @@ func (sv *ServiceView) bringUpProfile() tea.Cmd {
 			}
 		}
 	}
-	compose := sv.compose
-	return func() tea.Msg {
-		if err := compose.Up(context.Background(), profiles); err != nil {
-			return ProfileUpMsg{name: name, err: err}
-		}
-		return ProfileUpMsg{name: name}
-	}
+	return sv.startComposeUp(profiles, name, true)
 }
 
 func (sv *ServiceView) handleProfileDown(msg ProfileDownMsg) (View, tea.Cmd) {
@@ -912,13 +904,8 @@ func (sv *ServiceView) handleProfileDown(msg ProfileDownMsg) (View, tea.Cmd) {
 		}
 	}
 
-	compose := sv.compose
-	return sv, func() tea.Msg {
-		if err := compose.Up(context.Background(), msg.profiles); err != nil {
-			return ProfileUpMsg{name: msg.name, err: err}
-		}
-		return ProfileUpMsg{name: msg.name}
-	}
+	sv.appendOutput("[starting services...]")
+	return sv, sv.startComposeUp(msg.profiles, msg.name, true)
 }
 
 func (sv *ServiceView) handleHookStart(msg HookStartMsg) (View, tea.Cmd) {
@@ -977,13 +964,46 @@ func (sv *ServiceView) handleHookStream(msg HookStreamMsg) (View, tea.Cmd) {
 }
 
 func (sv *ServiceView) handleHookDone(msg HookDoneMsg) (View, tea.Cmd) {
-	sv.appendOutput("[hooks completed]")
-	compose := sv.compose
+	sv.appendOutput("[hooks completed, starting services...]")
+	return sv, sv.startComposeUp(msg.profiles, msg.name, true)
+}
+
+// handleComposeUpStream displays one line of compose up output and reads the next.
+func (sv *ServiceView) handleComposeUpStream(msg ComposeUpStreamMsg) (View, tea.Cmd) {
+	if msg.line != "" {
+		sv.appendOutput(msg.line)
+	}
 	return sv, func() tea.Msg {
-		if err := compose.Up(context.Background(), msg.profiles); err != nil {
-			return ProfileUpMsg{name: msg.name, err: err}
+		line, ok := <-msg.ch
+		if !ok {
+			if msg.profileUp {
+				return ProfileUpMsg{name: msg.name}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s started]", msg.name)}
 		}
-		return ProfileUpMsg{name: msg.name}
+		return ComposeUpStreamMsg{line: line, ch: msg.ch, name: msg.name, profileUp: msg.profileUp}
+	}
+}
+
+// startComposeUp returns a tea.Cmd that starts a streaming compose up.
+func (sv *ServiceView) startComposeUp(profiles []string, name string, profileUp bool, services ...string) tea.Cmd {
+	compose := sv.compose
+	return func() tea.Msg {
+		ch, err := compose.UpStream(context.Background(), profiles, services...)
+		if err != nil {
+			if profileUp {
+				return ProfileUpMsg{name: name, err: err}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
+		}
+		line, ok := <-ch
+		if !ok {
+			if profileUp {
+				return ProfileUpMsg{name: name}
+			}
+			return OutputLineMsg{Line: fmt.Sprintf("[%s started]", name)}
+		}
+		return ComposeUpStreamMsg{line: line, ch: ch, name: name, profileUp: profileUp}
 	}
 }
 

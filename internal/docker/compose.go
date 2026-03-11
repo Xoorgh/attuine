@@ -148,6 +148,51 @@ func (c *Compose) Up(ctx context.Context, profiles []string, services ...string)
 	return nil
 }
 
+// UpStream starts "docker compose up -d --build" and streams combined
+// stdout/stderr line by line. The returned channel is closed when the
+// process exits.
+func (c *Compose) UpStream(ctx context.Context, profiles []string, services ...string) (<-chan string, error) {
+	var args []string
+	for _, p := range profiles {
+		args = append(args, "--profile", p)
+	}
+	args = append(args, "up", "-d", "--build")
+	args = append(args, services...)
+	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(args...)...)
+	cmd.Dir = c.dir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("docker compose up: %w", err)
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("docker compose up: %w", err)
+	}
+
+	ch := make(chan string, 64)
+	go func() {
+		defer close(ch)
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			select {
+			case ch <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err := cmd.Wait(); err != nil {
+			select {
+			case ch <- fmt.Sprintf("[compose up failed: %v]", err):
+			case <-ctx.Done():
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
 func (c *Compose) Down(ctx context.Context, profiles []string) error {
 	var args []string
 	for _, p := range profiles {
