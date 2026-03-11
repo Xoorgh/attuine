@@ -109,7 +109,11 @@ var profileDownCmd = &cobra.Command{
 	Short: "Bring down all services",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		compose := docker.NewCompose(cfg.ComposeFile, cfg.ComposeEnv, cfg.Dir)
-		if err := compose.Down(context.Background()); err != nil {
+		var allProfiles []string
+		for _, p := range cfg.Profiles {
+			allProfiles = append(allProfiles, p.Profiles...)
+		}
+		if err := compose.Down(context.Background(), allProfiles); err != nil {
 			return fmt.Errorf("compose down: %w", err)
 		}
 

@@ -548,9 +548,13 @@ func (sv *ServiceView) updateKeypress(msg tea.KeyMsg) (View, tea.Cmd, bool) {
 
 	case key.Matches(msg, Keys.BulkDown):
 		compose := sv.compose
+		var allProfiles []string
+		for _, p := range sv.cfg.Profiles {
+			allProfiles = append(allProfiles, p.Profiles...)
+		}
 		sv.appendOutput("[bringing down all services...]")
 		return sv, func() tea.Msg {
-			if err := compose.Down(context.Background()); err != nil {
+			if err := compose.Down(context.Background(), allProfiles); err != nil {
 				return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
 			}
 			return OutputLineMsg{Line: "[all services stopped]"}
@@ -853,19 +857,20 @@ func (sv *ServiceView) switchProfile(profileName string) tea.Cmd {
 	compose := sv.compose
 	cfg := sv.cfg
 
-	var profiles []string
+	var targetProfiles []string
+	var allProfiles []string
 	for _, p := range cfg.Profiles {
+		allProfiles = append(allProfiles, p.Profiles...)
 		if p.Name == profileName {
-			profiles = p.Profiles
-			break
+			targetProfiles = p.Profiles
 		}
 	}
 
 	return func() tea.Msg {
-		if err := compose.Down(context.Background()); err != nil {
+		if err := compose.Down(context.Background(), allProfiles); err != nil {
 			return ProfileUpMsg{name: profileName, err: fmt.Errorf("compose down: %w", err)}
 		}
-		return ProfileDownMsg{profiles: profiles, name: profileName}
+		return ProfileDownMsg{profiles: targetProfiles, name: profileName}
 	}
 }
 
