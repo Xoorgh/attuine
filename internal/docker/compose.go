@@ -138,7 +138,7 @@ func (c *Compose) Up(ctx context.Context, profiles []string, services ...string)
 	for _, p := range profiles {
 		args = append(args, "--profile", p)
 	}
-	args = append(args, "up", "-d")
+	args = append(args, "up", "-d", "--build")
 	args = append(args, services...)
 	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(args...)...)
 	cmd.Dir = c.dir
@@ -148,8 +148,13 @@ func (c *Compose) Up(ctx context.Context, profiles []string, services ...string)
 	return nil
 }
 
-func (c *Compose) Down(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs("down")...)
+func (c *Compose) Down(ctx context.Context, profiles []string) error {
+	var args []string
+	for _, p := range profiles {
+		args = append(args, "--profile", p)
+	}
+	args = append(args, "down")
+	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(args...)...)
 	cmd.Dir = c.dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker compose down: %s: %w", string(out), err)
