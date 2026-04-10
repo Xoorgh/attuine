@@ -178,3 +178,76 @@ func TestDiscover_NotFound(t *testing.T) {
 		t.Fatal("Discover() should error when no attuine.yml found")
 	}
 }
+
+func TestLoad_DefaultLayout(t *testing.T) {
+	yaml := `
+compose_file: dc.yml
+`
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "attuine.yml"), []byte(yaml), 0644)
+
+	cfg, err := config.Load(filepath.Join(dir, "attuine.yml"))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Layout != "standalone" {
+		t.Errorf("Layout = %q, want %q", cfg.Layout, "standalone")
+	}
+	if cfg.IsSubmodules() {
+		t.Error("IsSubmodules() = true, want false")
+	}
+}
+
+func TestLoad_ExplicitSubmodules(t *testing.T) {
+	yaml := `
+compose_file: dc.yml
+layout: submodules
+`
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "attuine.yml"), []byte(yaml), 0644)
+
+	cfg, err := config.Load(filepath.Join(dir, "attuine.yml"))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Layout != "submodules" {
+		t.Errorf("Layout = %q, want %q", cfg.Layout, "submodules")
+	}
+	if !cfg.IsSubmodules() {
+		t.Error("IsSubmodules() = false, want true")
+	}
+}
+
+func TestLoad_ExplicitStandalone(t *testing.T) {
+	yaml := `
+compose_file: dc.yml
+layout: standalone
+`
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "attuine.yml"), []byte(yaml), 0644)
+
+	cfg, err := config.Load(filepath.Join(dir, "attuine.yml"))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Layout != "standalone" {
+		t.Errorf("Layout = %q, want %q", cfg.Layout, "standalone")
+	}
+	if cfg.IsSubmodules() {
+		t.Error("IsSubmodules() = true, want false")
+	}
+}
+
+func TestLoad_InvalidLayout(t *testing.T) {
+	yaml := `
+compose_file: dc.yml
+layout: monorepo
+`
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "attuine.yml"), []byte(yaml), 0644)
+
+	_, err := config.Load(filepath.Join(dir, "attuine.yml"))
+	if err == nil {
+		t.Fatal("Load() should error on invalid layout value")
+	}
+}
