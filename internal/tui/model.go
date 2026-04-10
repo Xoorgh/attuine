@@ -306,10 +306,10 @@ func (m *Model) renderStatusBar() string {
 		parts = append(parts, view.StatusBarHints()...)
 	}
 
-	// View indicator.
-	viewName := "Services"
+	// View indicator — shows the view g switches TO, not current.
+	viewName := "Git"
 	if m.activeView == ViewGit {
-		viewName = "Git"
+		viewName = "Services"
 	}
 	parts = append(parts, actionKeyStyle.Render("g")+" "+actionDescStyle.Render(viewName))
 
