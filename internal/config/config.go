@@ -13,11 +13,17 @@ const FileName = "attuine.yml"
 type Config struct {
 	ComposeFile string             `yaml:"compose_file"`
 	ComposeEnv  string             `yaml:"compose_env"`
+	Layout      string             `yaml:"layout"`
 	Hooks       Hooks              `yaml:"hooks"`
 	Profiles    []Profile          `yaml:"profiles"`
 	Projects    map[string]Project `yaml:"projects"`
 	Repos       map[string]Repo    `yaml:"repos"`
 	Dir         string             `yaml:"-"`
+}
+
+// IsSubmodules returns true when the layout is "submodules".
+func (c *Config) IsSubmodules() bool {
+	return c.Layout == "submodules"
 }
 
 type Hooks struct {
@@ -64,6 +70,15 @@ func Load(path string) (*Config, error) {
 
 	if cfg.ComposeFile == "" {
 		return nil, fmt.Errorf("compose_file is required in %s", path)
+	}
+
+	switch cfg.Layout {
+	case "":
+		cfg.Layout = "standalone"
+	case "standalone", "submodules":
+		// valid
+	default:
+		return nil, fmt.Errorf("invalid layout %q in %s (must be \"standalone\" or \"submodules\")", cfg.Layout, path)
 	}
 
 	for name, repo := range cfg.Repos {
