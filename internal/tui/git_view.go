@@ -181,7 +181,11 @@ func (gv *GitView) RenderSidebar(width, height int, focused bool) string {
 	var lines []string
 
 	lines = append(lines, profileHeaderStyle.Render("Git Repos"))
-	lines = append(lines, bulkHintStyle.Render("[S]ync All  [B]ranch  [C]ommit subs"))
+	hint := "[S]ync All  [B]ranch"
+	if gv.cfg.IsSubmodules() {
+		hint += "  [C]ommit subs"
+	}
+	lines = append(lines, bulkHintStyle.Render(hint))
 	lines = append(lines, "")
 
 	for i, entry := range gv.entries {
@@ -286,7 +290,9 @@ func (gv *GitView) StatusBarHints() []string {
 		case gitEntryRepo:
 			parts = append(parts, actionKeyStyle.Render("enter")+" "+actionDescStyle.Render("expand"))
 			parts = append(parts, actionKeyStyle.Render("S")+" "+actionDescStyle.Render("sync all"))
-			parts = append(parts, actionKeyStyle.Render("C")+" "+actionDescStyle.Render("commit subs"))
+			if gv.cfg.IsSubmodules() {
+				parts = append(parts, actionKeyStyle.Render("C")+" "+actionDescStyle.Render("commit subs"))
+			}
 		case gitEntryAction:
 			parts = append(parts, actionKeyStyle.Render("enter")+" "+actionDescStyle.Render("run"))
 			parts = append(parts, actionKeyStyle.Render("esc")+" "+actionDescStyle.Render("back"))
@@ -300,8 +306,12 @@ func (gv *GitView) StatusBarHints() []string {
 
 // HelpBindings returns git-view-specific key binding groups.
 func (gv *GitView) HelpBindings() [][]key.Binding {
+	gitBindings := []key.Binding{gitKeys.SyncAll, gitKeys.CreateBranch}
+	if gv.cfg.IsSubmodules() {
+		gitBindings = append(gitBindings, gitKeys.CommitSubs)
+	}
 	return [][]key.Binding{
-		{gitKeys.SyncAll, gitKeys.CreateBranch, gitKeys.CommitSubs},
+		gitBindings,
 		{Keys.Clear, Keys.PageUp, Keys.PageDown, Keys.GoTop, Keys.GoBottom},
 	}
 }
@@ -417,7 +427,9 @@ func (gv *GitView) updateKeypress(msg tea.KeyMsg) (View, tea.Cmd, bool) {
 		return gv, nil, true
 
 	case key.Matches(msg, gitKeys.CommitSubs):
-		return gv, gv.commitSubmodules(), true
+		if gv.cfg.IsSubmodules() {
+			return gv, gv.commitSubmodules(), true
+		}
 	}
 
 	// Delegate to panel-specific handlers.
