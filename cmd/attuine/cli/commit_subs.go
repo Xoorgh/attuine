@@ -14,8 +14,11 @@ var commitSubsMsg string
 
 var commitSubsCmd = &cobra.Command{
 	Use:   "commit-subs",
-	Short: "Stage and commit submodule pointer changes",
+	Short: "Stage and commit submodule pointer changes (requires layout: submodules)",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if cfg.Layout != "submodules" {
+			return fmt.Errorf("commit-subs requires layout: submodules in config")
+		}
 		ctx := context.Background()
 		parentDir := cfg.Dir
 
