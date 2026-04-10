@@ -58,4 +58,4 @@ internal/
 
 ## Config File Format
 
-`attuine.yml` defines: `compose_file`, `compose_env`, `hooks.pre_up`, `profiles` (named sets of compose profiles), `projects` (with commands), and `repos` (with paths and default branches).
+`attuine.yml` defines: `layout` (`standalone` or `submodules`, default `standalone`), `compose_file`, `compose_env`, `hooks.pre_up`, `profiles` (named sets of compose profiles), `projects` (with commands), and `repos` (with paths and default branches). The `commit-subs` command/action is only available when `layout: submodules`.
