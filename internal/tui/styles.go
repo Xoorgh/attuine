@@ -65,6 +65,10 @@ var (
 	commandItemStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("250")).
 		PaddingLeft(4)
+
+	logoStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("62")).
+		Bold(true)
 )
 
 func StatusIndicator(state string) string {

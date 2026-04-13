@@ -11,6 +11,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/charmbracelet/lipgloss"
+
+	"oxorg/attuine/internal/assets"
 	"oxorg/attuine/internal/config"
 	"oxorg/attuine/internal/git"
 )
@@ -179,6 +182,13 @@ func (gv *GitView) Update(msg tea.Msg) (View, tea.Cmd, bool) {
 // RenderSidebar renders the left sidebar panel for the git view.
 func (gv *GitView) RenderSidebar(width, height int, focused bool) string {
 	var lines []string
+
+	// Logo.
+	logo := strings.TrimRight(assets.Logo, "\n")
+	logo = logoStyle.Render(logo)
+	logo = lipgloss.PlaceHorizontal(width, lipgloss.Center, logo)
+	lines = append(lines, logo)
+	lines = append(lines, "")
 
 	lines = append(lines, profileHeaderStyle.Render("Git Repos"))
 	hint := "[S]ync All  [B]ranch"

@@ -13,6 +13,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/charmbracelet/lipgloss"
+
+	"oxorg/attuine/internal/assets"
 	"oxorg/attuine/internal/config"
 	"oxorg/attuine/internal/docker"
 	"oxorg/attuine/internal/runner"
@@ -215,6 +218,13 @@ func (sv *ServiceView) Update(msg tea.Msg) (View, tea.Cmd, bool) {
 // RenderSidebar renders the left sidebar panel.
 func (sv *ServiceView) RenderSidebar(width, height int, focused bool) string {
 	var lines []string
+
+	// Logo.
+	logo := strings.TrimRight(assets.Logo, "\n")
+	logo = logoStyle.Render(logo)
+	logo = lipgloss.PlaceHorizontal(width, lipgloss.Center, logo)
+	lines = append(lines, logo)
+	lines = append(lines, "")
 
 	// Profile header.
 	lines = append(lines, profileHeaderStyle.Render("Profile: "+sv.activeProfile+"  [p]"))
