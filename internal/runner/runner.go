@@ -8,7 +8,8 @@ import (
 )
 
 func RunHost(ctx context.Context, dir string, command string) (<-chan string, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	shell, args := shellArgs(command)
+	cmd := exec.CommandContext(ctx, shell, args...)
 	cmd.Dir = dir
 
 	stdout, err := cmd.StdoutPipe()
@@ -46,7 +47,8 @@ func RunHost(ctx context.Context, dir string, command string) (<-chan string, er
 }
 
 func RunHostInteractive(ctx context.Context, dir string, command string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	shell, args := shellArgs(command)
+	cmd := exec.CommandContext(ctx, shell, args...)
 	cmd.Dir = dir
 	return cmd
 }
