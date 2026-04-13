@@ -361,8 +361,8 @@ func (m *Model) recalcLayout() {
 		m.contentHeight = 1
 	}
 	m.sidebarWidth = m.width * 30 / 100
-	if m.sidebarWidth < 25 {
-		m.sidebarWidth = 25
+	if m.sidebarWidth < 32 {
+		m.sidebarWidth = 32
 	}
 	if m.sidebarWidth > 40 {
 		m.sidebarWidth = 40
