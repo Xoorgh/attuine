@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const fileName = "state.json"
@@ -42,8 +43,21 @@ func (s *State) Save(dir string) error {
 	return os.WriteFile(filepath.Join(dir, fileName), data, 0o644)
 }
 
-// DefaultDir returns the default state directory: ~/.local/state/attuine
+// DefaultDir returns the default state directory.
+// On Windows: %LOCALAPPDATA%\attuine
+// On macOS/Linux: ~/.local/state/attuine
 func DefaultDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		dir := os.Getenv("LOCALAPPDATA")
+		if dir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			dir = filepath.Join(home, "AppData", "Local")
+		}
+		return filepath.Join(dir, "attuine"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

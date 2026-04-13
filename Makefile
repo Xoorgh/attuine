@@ -1,9 +1,10 @@
 .PHONY: build test lint clean install uninstall man
 
 PREFIX ?= /usr/local
+BINARY := attuine
 
 build:
-	go build -o bin/attuine ./cmd/attuine
+	go build -o bin/$(BINARY) ./cmd/attuine
 
 test:
 	go test ./... -v
@@ -16,12 +17,14 @@ clean:
 
 man: build
 	mkdir -p doc/man
-	./bin/attuine man doc/man/
+	./bin/$(BINARY) man doc/man/
 
-install: bin/attuine doc/man/attuine.1
-	install -Dm755 bin/attuine $(DESTDIR)$(PREFIX)/bin/attuine
-	install -Dm644 doc/man/attuine.1 $(DESTDIR)$(PREFIX)/share/man/man1/attuine.1
+install: build man
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
+	install -m755 bin/$(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
+	install -m644 doc/man/attuine.1 $(DESTDIR)$(PREFIX)/share/man/man1/attuine.1
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/attuine
+	rm -f $(DESTDIR)$(PREFIX)/bin/$(BINARY)
 	rm -f $(DESTDIR)$(PREFIX)/share/man/man1/attuine.1

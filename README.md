@@ -8,8 +8,51 @@ Requires Go 1.26+.
 
 ```sh
 make build        # produces bin/attuine
-make install      # installs to /usr/local/bin + man page
+make test         # run tests
+make lint         # run go vet
 ```
+
+### Install (Linux / macOS)
+
+```sh
+make install                        # installs to /usr/local/bin + man page
+make install PREFIX=$HOME/.local    # custom prefix
+sudo make install                   # system-wide install
+```
+
+To uninstall:
+
+```sh
+make uninstall
+```
+
+### Install (Windows)
+
+```powershell
+go build -o attuine.exe ./cmd/attuine
+```
+
+Place the resulting binary somewhere on your `PATH`. Man pages are not applicable on Windows. Docker Desktop and Git for Windows must be installed.
+
+### Man Pages
+
+Man pages are generated automatically during `make install`. To generate them separately:
+
+```sh
+make man          # generates man pages in doc/man/
+```
+
+This produces `doc/man/attuine.1` (and subcommand pages) from the Cobra command tree. After installing, view them with `man attuine`.
+
+## Platform Support
+
+| Platform | Status | Notes |
+|---|---|---|
+| Linux | Fully supported | Primary development platform |
+| macOS | Fully supported | Requires Docker Desktop |
+| Windows | Supported | Requires Docker Desktop and Git for Windows |
+
+On Windows, host commands defined in `projects[].commands[].run` and `hooks.pre_up` are executed via `cmd /c` instead of `sh -c`. Write these commands in a portable way or use platform-appropriate scripts.
 
 ## Setup
 
@@ -103,9 +146,17 @@ All commands support `--json` for machine-readable output and `--repo` to filter
 ## Shell Completion
 
 ```sh
+# Bash
 attuine completion bash > /etc/bash_completion.d/attuine
+
+# Zsh
 attuine completion zsh > "${fpath[1]}/_attuine"
+
+# Fish
 attuine completion fish > ~/.config/fish/completions/attuine.fish
+
+# PowerShell
+attuine completion powershell > attuine.ps1
 ```
 
 ## License
