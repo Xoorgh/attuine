@@ -19,7 +19,7 @@ man: build
 	mkdir -p doc/man
 	./bin/$(BINARY) man doc/man/
 
-install: build man
+install: bin/$(BINARY) doc/man/attuine.1
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
 	install -m755 bin/$(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
