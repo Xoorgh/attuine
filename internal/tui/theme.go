@@ -104,3 +104,73 @@ func loadThemeFrom(path string) Theme {
 func LoadTheme() {
 	currentTheme = loadThemeFrom(themeConfigPath())
 }
+
+// ApplyTheme rebuilds all style vars from currentTheme.
+func ApplyTheme() {
+	focusedBorder = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(currentTheme.Accent)
+
+	unfocusedBorder = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(currentTheme.Muted)
+
+	navActive = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(currentTheme.Accent)
+
+	navInactive = lipgloss.NewStyle().
+		Foreground(currentTheme.Muted)
+
+	statusRunning = lipgloss.NewStyle().Foreground(currentTheme.Ok).SetString("●")
+	statusStopped = lipgloss.NewStyle().Foreground(currentTheme.Muted).SetString("○")
+	statusStarting = lipgloss.NewStyle().Foreground(currentTheme.Warn).SetString("◐")
+	statusError = lipgloss.NewStyle().Foreground(currentTheme.Error).SetString("✕")
+	statusUnknown = lipgloss.NewStyle().Foreground(currentTheme.Muted).SetString("?")
+
+	statusBarStyle = lipgloss.NewStyle().
+		Foreground(currentTheme.Muted).
+		PaddingLeft(1)
+
+	titleStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(currentTheme.Accent).
+		PaddingLeft(1)
+
+	selectedStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(currentTheme.Highlight)
+
+	overlayStyle = lipgloss.NewStyle().
+		BorderStyle(lipgloss.DoubleBorder()).
+		BorderForeground(currentTheme.Accent).
+		Padding(1, 2)
+
+	actionKeyStyle = lipgloss.NewStyle().
+		Foreground(currentTheme.Accent).
+		Bold(true)
+
+	actionDescStyle = lipgloss.NewStyle().
+		Foreground(currentTheme.Text)
+
+	profileHeaderStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(currentTheme.Accent).
+		PaddingLeft(1)
+
+	bulkHintStyle = lipgloss.NewStyle().
+		Foreground(currentTheme.Muted).
+		PaddingLeft(1)
+
+	sectionDividerStyle = lipgloss.NewStyle().
+		Foreground(currentTheme.Muted).
+		PaddingLeft(1)
+
+	commandItemStyle = lipgloss.NewStyle().
+		Foreground(currentTheme.Text).
+		PaddingLeft(4)
+
+	logoStyle = lipgloss.NewStyle().
+		Foreground(currentTheme.Accent).
+		Bold(true)
+}

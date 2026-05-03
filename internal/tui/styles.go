@@ -3,73 +3,31 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	focusedBorder = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62"))
-
-	unfocusedBorder = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240"))
-
-	navActive = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("62"))
-
-	navInactive = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240"))
-
-	statusRunning  = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).SetString("●")
-	statusStopped  = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).SetString("○")
-	statusStarting = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).SetString("◐")
-	statusError    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).SetString("✕")
-	statusUnknown  = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).SetString("?")
-
-	statusBarStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		PaddingLeft(1)
-
-	titleStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("62")).
-		PaddingLeft(1)
-
-	selectedStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("255"))
-
-	overlayStyle = lipgloss.NewStyle().
-		BorderStyle(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(1, 2)
-
-	actionKeyStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("62")).
-		Bold(true)
-
-	actionDescStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("250"))
-
-	profileHeaderStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("62")).
-		PaddingLeft(1)
-
-	bulkHintStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		PaddingLeft(1)
-
-	sectionDividerStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		PaddingLeft(1)
-
-	commandItemStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("250")).
-		PaddingLeft(4)
-
-	logoStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("62")).
-		Bold(true)
+	focusedBorder       lipgloss.Style
+	unfocusedBorder     lipgloss.Style
+	navActive           lipgloss.Style
+	navInactive         lipgloss.Style
+	statusRunning       lipgloss.Style
+	statusStopped       lipgloss.Style
+	statusStarting      lipgloss.Style
+	statusError         lipgloss.Style
+	statusUnknown       lipgloss.Style
+	statusBarStyle      lipgloss.Style
+	titleStyle          lipgloss.Style
+	selectedStyle       lipgloss.Style
+	overlayStyle        lipgloss.Style
+	actionKeyStyle      lipgloss.Style
+	actionDescStyle     lipgloss.Style
+	profileHeaderStyle  lipgloss.Style
+	bulkHintStyle       lipgloss.Style
+	sectionDividerStyle lipgloss.Style
+	commandItemStyle    lipgloss.Style
+	logoStyle           lipgloss.Style
 )
+
+func init() {
+	ApplyTheme()
+}
 
 func StatusIndicator(state string) string {
 	switch state {
