@@ -2,7 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -129,6 +132,18 @@ type cmdStreamMsg struct {
 	ch   <-chan string
 }
 
+// themeReloadMsg signals that the theme file should be reloaded.
+type themeReloadMsg struct{}
+
+// listenForThemeReload blocks until SIGUSR1 is received, then returns a themeReloadMsg.
+func listenForThemeReload() tea.Msg {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGUSR1)
+	<-sig
+	signal.Stop(sig)
+	return themeReloadMsg{}
+}
+
 // ---------------------------------------------------------------------------
 // Model — thin routing shell
 // ---------------------------------------------------------------------------
@@ -172,7 +187,7 @@ func (m *Model) currentView() View {
 
 // Init delegates to the active view.
 func (m *Model) Init() tea.Cmd {
-	return m.currentView().Init()
+	return tea.Batch(m.currentView().Init(), listenForThemeReload)
 }
 
 // Update handles incoming messages, routing most to the active view.
@@ -188,6 +203,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.views[kind] = v
 		}
 		return m, nil
+
+	case themeReloadMsg:
+		LoadTheme()
+		ApplyTheme()
+		return m, listenForThemeReload
 
 	case tea.KeyMsg:
 		if m.showHelp {

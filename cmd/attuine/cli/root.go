@@ -43,6 +43,8 @@ Run without a subcommand to launch the interactive TUI.`,
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
 		stateDir, _ := state.DefaultDir()
+		tui.LoadTheme()
+		tui.ApplyTheme()
 		model := tui.New(cfg, stateDir)
 		p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		if _, err := p.Run(); err != nil {
