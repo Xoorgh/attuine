@@ -54,7 +54,7 @@ func Pull(ctx context.Context, dir string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(out), fmt.Errorf("git pull: %s: %w", strings.TrimSpace(string(out)), err)
+		return string(out), fmt.Errorf("git pull: %s%s: %w", strings.TrimSpace(string(out)), ownershipHint(out), err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -63,10 +63,27 @@ func Pull(ctx context.Context, dir string) (string, error) {
 func Checkout(ctx context.Context, dir string, branch string) error {
 	cmd := exec.CommandContext(ctx, "git", "checkout", branch)
 	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git checkout %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git checkout %s: %s%s: %w", branch, strings.TrimSpace(string(out)), ownershipHint(out), err)
+	}
+	// git switches the branch and exits 0 even when it could not write some
+	// of the branch's files, leaving them missing from the work tree. Report
+	// that as a failure instead of a clean checkout.
+	if hint := ownershipHint(out); hint != "" {
+		return fmt.Errorf("git checkout %s: %s%s", branch, strings.TrimSpace(string(out)), hint)
 	}
 	return nil
+}
+
+// ownershipHint returns a pointer to `attuine doctor` when git output shows it
+// could not write into the work tree, which is how files a root container left
+// in the checkout surface during a pull or checkout. Otherwise it returns "".
+func ownershipHint(out []byte) string {
+	if !strings.Contains(string(out), "Permission denied") {
+		return ""
+	}
+	return " (some files in this repo may not be owned by you; run `attuine doctor --fix`)"
 }
 
 // CreateBranch creates and checks out a new branch.

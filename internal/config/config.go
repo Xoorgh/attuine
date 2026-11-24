@@ -55,6 +55,10 @@ type Command struct {
 	Run         string `yaml:"run"`
 	Service     string `yaml:"service"`
 	Interactive bool   `yaml:"interactive"`
+	// User overrides the service's configured user for this command (passed
+	// to `compose exec -u`), for example `root` for a root shell in a service
+	// that otherwise runs as the host user. Only valid with Service.
+	User string `yaml:"user"`
 }
 
 func Load(path string) (*Config, error) {
@@ -79,6 +83,14 @@ func Load(path string) (*Config, error) {
 		// valid
 	default:
 		return nil, fmt.Errorf("invalid layout %q in %s (must be \"standalone\" or \"submodules\")", cfg.Layout, path)
+	}
+
+	for name, proj := range cfg.Projects {
+		for _, cmd := range proj.Commands {
+			if cmd.User != "" && cmd.Service == "" {
+				return nil, fmt.Errorf("project %q command %q sets user but no service in %s (user applies only to commands run in a service)", name, cmd.Name, path)
+			}
+		}
 	}
 
 	for name, repo := range cfg.Repos {

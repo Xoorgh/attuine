@@ -251,3 +251,46 @@ layout: monorepo
 		t.Fatal("Load() should error on invalid layout value")
 	}
 }
+
+func TestLoad_CommandUser(t *testing.T) {
+	yaml := `
+compose_file: dc.yml
+projects:
+  app:
+    path: ./app
+    commands:
+      - name: Root Shell
+        run: bash
+        service: app
+        user: root
+`
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "attuine.yml"), []byte(yaml), 0644)
+
+	cfg, err := config.Load(filepath.Join(dir, "attuine.yml"))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if got := cfg.Projects["app"].Commands[0].User; got != "root" {
+		t.Errorf("Commands[0].User = %q, want %q", got, "root")
+	}
+}
+
+func TestLoad_CommandUserWithoutService(t *testing.T) {
+	yaml := `
+compose_file: dc.yml
+projects:
+  app:
+    path: ./app
+    commands:
+      - name: Build
+        run: make
+        user: root
+`
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "attuine.yml"), []byte(yaml), 0644)
+
+	if _, err := config.Load(filepath.Join(dir, "attuine.yml")); err == nil {
+		t.Fatal("Load() should error when a command sets user without a service")
+	}
+}

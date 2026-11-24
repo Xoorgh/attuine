@@ -2,8 +2,10 @@ package git_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +89,59 @@ func TestCheckout(t *testing.T) {
 	branch, _ := git.CurrentBranch(context.Background(), repo)
 	if branch != "master" {
 		t.Errorf("after Checkout, CurrentBranch() = %q, want %q", branch, "master")
+	}
+}
+
+// A directory the user cannot write into, as a container running as root
+// leaves behind, makes git print "Permission denied" for the files it cannot
+// create, yet exit 0 with the branch switched. Checkout reports that as an
+// error that points at `attuine doctor`.
+func TestCheckout_PermissionDeniedHintsAtDoctor(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write into any directory")
+	}
+	repo := initTestRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s: %v", args, out, err)
+		}
+	}
+	gen := filepath.Join(repo, "gen")
+	os.Mkdir(gen, 0o755)
+	os.WriteFile(filepath.Join(gen, "a"), []byte("a"), 0o644)
+	run("add", "gen")
+	run("commit", "-m", "gen a")
+	run("checkout", "-b", "other")
+	os.WriteFile(filepath.Join(gen, "b"), []byte("b"), 0o644)
+	run("add", "gen")
+	run("commit", "-m", "gen b")
+	run("checkout", "master")
+
+	if err := os.Chmod(gen, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(gen, 0o755) })
+
+	err := git.Checkout(context.Background(), repo, "other")
+	if err == nil {
+		t.Fatal("Checkout() error = nil, want a permission error")
+	}
+	if !strings.Contains(err.Error(), "attuine doctor --fix") {
+		t.Errorf("Checkout() error = %q, want a hint at `attuine doctor --fix`", err)
+	}
+}
+
+func TestCheckout_OtherErrorsHaveNoHint(t *testing.T) {
+	repo := initTestRepo(t)
+	err := git.Checkout(context.Background(), repo, "does-not-exist")
+	if err == nil {
+		t.Fatal("Checkout() error = nil, want an error")
+	}
+	if strings.Contains(err.Error(), "doctor") {
+		t.Errorf("Checkout() error = %q, want no doctor hint", err)
 	}
 }
 

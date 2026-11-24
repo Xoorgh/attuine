@@ -126,7 +126,27 @@ repos:
 | `projects` | no | Projects with paths and commands |
 | `repos` | no | Git repositories with paths and default branches |
 
+A project command with `service` runs in that container through `docker compose exec`, as the service's configured user. Set `user` on the command (for example `user: root`) to override it for that command alone.
+
 Setting `layout: submodules` enables the `commit-subs` command for staging and committing submodule pointer changes. This requires a repo with `path: .` (the parent repo).
+
+### Running containers as the host user
+
+Containers that bind-mount a checkout and run as root leave root-owned files in it (build output, caches, generated code), which later break `git pull`, `git checkout` and host-side builds. Attuine sets `HOST_UID` and `HOST_GID` to the invoking user's ids for every Compose command it runs (a value already in the environment wins), so a compose file can run those services as you:
+
+```yaml
+x-dev-user: &dev_user "${HOST_UID:-1000}:${HOST_GID:-1000}"
+
+services:
+  app:
+    user: *dev_user
+    volumes:
+      - ../app:/app
+```
+
+Keep a fallback in the variable: plain `docker compose` runs and other tools that read the same file do not set it, and the `${VAR:?}` form fails parsing the whole file for them. The image then has to work for a uid with no passwd entry: give it a writable `HOME` (one with mode 1777 works for any uid) and make the paths its named volumes mount writable, since a fresh volume copies the ownership of the image directory it is mounted on.
+
+`attuine doctor` finds what already went wrong: files in each repo you do not own (grouped by directory), and volume mountpoints nested inside a bind mount whose host directory is missing, which the Docker daemon would create as root. `attuine doctor --fix` chowns those files back to you through a throwaway container (`--fix-image`, default `busybox:1.37`; no sudo) and creates the missing directories. It exits 1 while problems remain. A checkout or pull that fails with "Permission denied" points at it.
 
 ## Usage
 
@@ -139,6 +159,8 @@ attuine branch checkout NAME
 attuine profile up Core     # bring up a profile's services
 attuine profile down        # stop all services
 attuine service list        # show running services
+attuine doctor              # find files in the repos you do not own
+attuine doctor --fix        # chown them back and create missing mountpoints
 ```
 
 All commands support `--json` for machine-readable output and `--repo` to filter to specific repos.

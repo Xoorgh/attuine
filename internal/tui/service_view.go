@@ -1088,7 +1088,7 @@ func (sv *ServiceView) runCommand(projectName string, cmd config.Command) tea.Cm
 
 	if cmd.Interactive {
 		if cmd.Service != "" {
-			c := compose.ExecInteractive(context.Background(), cmd.Service, cmd.Run)
+			c := compose.ExecInteractive(context.Background(), cmd.Service, cmd.User, cmd.Run)
 			return tea.ExecProcess(c, func(err error) tea.Msg {
 				if err != nil {
 					return OutputLineMsg{Line: fmt.Sprintf("[error: %v]", err)}
@@ -1106,7 +1106,7 @@ func (sv *ServiceView) runCommand(projectName string, cmd config.Command) tea.Cm
 	}
 
 	if cmd.Service != "" {
-		ch, cancel := compose.Exec(context.Background(), cmd.Service, cmd.Run)
+		ch, cancel := compose.Exec(context.Background(), cmd.Service, cmd.User, cmd.Run)
 		sv.logCancel = cancel
 		return readStream(ch)
 	}

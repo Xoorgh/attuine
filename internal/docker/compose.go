@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,29 @@ func NewCompose(composeFile, envFile, dir string) *Compose {
 		env = filepath.Join(dir, env)
 	}
 	return &Compose{file: file, envFile: env, dir: dir}
+}
+
+// command returns a docker invocation of `compose <args>` that runs in the
+// config directory with HOST_UID and HOST_GID set (see HostUserEnv).
+func (c *Compose) command(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(args...)...)
+	cmd.Dir = c.dir
+	cmd.Env = HostUserEnv(os.Environ(), os.Getuid(), os.Getgid())
+	return cmd
+}
+
+// ExecArgs builds the `exec` arguments for running command through `sh -c` in
+// service. interactive keeps a TTY attached; otherwise -T disables it so the
+// output can be streamed. A non-empty user is passed as -u.
+func ExecArgs(service, user string, interactive bool, command string) []string {
+	args := []string{"exec"}
+	if !interactive {
+		args = append(args, "-T")
+	}
+	if user != "" {
+		args = append(args, "-u", user)
+	}
+	return append(args, service, "sh", "-c", command)
 }
 
 func (c *Compose) BuildArgs(args ...string) []string {
@@ -101,9 +125,7 @@ func (c *Compose) ListServices(ctx context.Context, profiles []string) ([]string
 		profileArgs = append(profileArgs, "--profile", p)
 	}
 	profileArgs = append(profileArgs, "config", "--services")
-	args := c.BuildArgs(profileArgs...)
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, profileArgs...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker compose config --services: %w", err)
@@ -119,9 +141,7 @@ func (c *Compose) ListServices(ctx context.Context, profiles []string) ([]string
 }
 
 func (c *Compose) Status(ctx context.Context) ([]ServiceStatus, error) {
-	args := c.BuildArgs("ps", "--format", "json")
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, "ps", "--format", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker compose ps: %w", err)
@@ -140,8 +160,7 @@ func (c *Compose) Up(ctx context.Context, profiles []string, services ...string)
 	}
 	args = append(args, "up", "-d", "--build")
 	args = append(args, services...)
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(args...)...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker compose up: %s: %w", string(out), err)
 	}
@@ -158,8 +177,7 @@ func (c *Compose) UpStream(ctx context.Context, profiles []string, services ...s
 	}
 	args = append(args, "up", "-d", "--build")
 	args = append(args, services...)
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(args...)...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -199,8 +217,7 @@ func (c *Compose) Down(ctx context.Context, profiles []string) error {
 		args = append(args, "--profile", p)
 	}
 	args = append(args, "down")
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(args...)...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker compose down: %s: %w", string(out), err)
 	}
@@ -209,8 +226,7 @@ func (c *Compose) Down(ctx context.Context, profiles []string) error {
 
 func (c *Compose) Stop(ctx context.Context, services ...string) error {
 	stopArgs := append([]string{"stop"}, services...)
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(stopArgs...)...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, stopArgs...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker compose stop: %s: %w", string(out), err)
 	}
@@ -219,8 +235,7 @@ func (c *Compose) Stop(ctx context.Context, services ...string) error {
 
 func (c *Compose) Build(ctx context.Context, services ...string) error {
 	buildArgs := append([]string{"build"}, services...)
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(buildArgs...)...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, buildArgs...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker compose build: %s: %w", string(out), err)
 	}
@@ -233,8 +248,7 @@ func (c *Compose) Logs(ctx context.Context, service string) (<-chan string, cont
 
 	go func() {
 		defer close(ch)
-		cmd := exec.CommandContext(ctx, "docker", c.BuildArgs("logs", "-f", "--no-log-prefix", service)...)
-		cmd.Dir = c.dir
+		cmd := c.command(ctx, "logs", "-f", "--no-log-prefix", service)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return
@@ -257,15 +271,15 @@ func (c *Compose) Logs(ctx context.Context, service string) (<-chan string, cont
 	return ch, cancel
 }
 
-func (c *Compose) Exec(ctx context.Context, service string, command string) (<-chan string, context.CancelFunc) {
+// Exec runs command in service and streams its combined output. user, when not
+// empty, overrides the service's configured user for this one command.
+func (c *Compose) Exec(ctx context.Context, service, user, command string) (<-chan string, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(ctx)
 	ch := make(chan string, 64)
 
 	go func() {
 		defer close(ch)
-		shellArgs := []string{"exec", "-T", service, "sh", "-c", command}
-		cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(shellArgs...)...)
-		cmd.Dir = c.dir
+		cmd := c.command(ctx, ExecArgs(service, user, false, command)...)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return
@@ -288,17 +302,15 @@ func (c *Compose) Exec(ctx context.Context, service string, command string) (<-c
 	return ch, cancel
 }
 
-func (c *Compose) ExecInteractive(ctx context.Context, service string, command string) *exec.Cmd {
-	shellArgs := []string{"exec", service, "sh", "-c", command}
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(shellArgs...)...)
-	cmd.Dir = c.dir
+// ExecInteractive returns an attached `compose exec` for command in service.
+// user, when not empty, overrides the service's configured user.
+func (c *Compose) ExecInteractive(ctx context.Context, service, user, command string) *exec.Cmd {
+	cmd := c.command(ctx, ExecArgs(service, user, true, command)...)
 	return cmd
 }
 
 func (c *Compose) Shell(ctx context.Context, service string) *exec.Cmd {
-	shellArgs := []string{"exec", service, "sh"}
-	cmd := exec.CommandContext(ctx, "docker", c.BuildArgs(shellArgs...)...)
-	cmd.Dir = c.dir
+	cmd := c.command(ctx, "exec", service, "sh")
 	return cmd
 }
 
